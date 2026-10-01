@@ -3,7 +3,7 @@ use crate::{
     common::PORTABLE_APPNAME_RUNTIME_ENV_KEY,
     custom_server::*,
     ipc,
-    privacy_mode::win_topmost_window::{self, WIN_TOPMOST_INJECTED_PROCESS_EXE},
+    privacy_mode::win_topmost_window::{self, injected_process_exe},
 };
 use hbb_common::{
     allow_err,
@@ -1228,8 +1228,8 @@ pub fn portable_service_logon_helper_paths() -> Option<(PathBuf, PathBuf)> {
         .home_dir()
         .join("AppData")
         .join("Local")
-        .join("rustdesk-sciter");
-    let dst = dir.join("rustdesk.exe");
+        .join(format!("{}-sciter", crate::get_app_name()));
+    let dst = dir.join(format!("{}.exe", crate::get_app_name()));
     Some((dir, dst))
 }
 
@@ -1376,20 +1376,20 @@ fn get_default_install_path() -> String {
 }
 
 pub fn check_update_broker_process() -> ResultType<()> {
-    let process_exe = win_topmost_window::INJECTED_PROCESS_EXE;
+    let process_exe = injected_process_exe();
     let origin_process_exe = win_topmost_window::ORIGIN_PROCESS_EXE;
 
     let exe_file = std::env::current_exe()?;
     let Some(cur_dir) = exe_file.parent() else {
         bail!("Cannot get parent of current exe file");
     };
-    let cur_exe = cur_dir.join(process_exe);
+    let cur_exe = cur_dir.join(&process_exe);
 
     // Force update broker exe if failed to check modified time.
     let cmds = format!(
         "
         chcp 65001
-        taskkill /F /IM {process_exe}
+        taskkill /F /IM \"{process_exe}\"
         copy /Y \"{origin_process_exe}\" \"{cur_exe}\"
     ",
         cur_exe = cur_exe.to_string_lossy(),
@@ -1452,10 +1452,12 @@ pub fn copy_exe_cmd(src_exe: &str, exe: &str, path: &str) -> ResultType<String> 
     Ok(format!(
         "
         {main_exe}
+        {rename_exe}
         copy /Y \"{ORIGIN_PROCESS_EXE}\" \"{path}\\{broker_exe}\"
         ",
+        rename_exe = rename_exe_cmd(src_exe, path)?,
         ORIGIN_PROCESS_EXE = win_topmost_window::ORIGIN_PROCESS_EXE,
-        broker_exe = win_topmost_window::INJECTED_PROCESS_EXE,
+        broker_exe = injected_process_exe(),
     ))
 }
 
@@ -1466,8 +1468,8 @@ pub fn rename_exe_cmd(src_exe: &str, path: &str) -> ResultType<String> {
         .ok_or(anyhow!("Can't get file name of {src_exe}"))?
         .to_string_lossy()
         .to_string();
-    let app_name = crate::get_app_name().to_lowercase();
-    if src_exe_filename.to_lowercase() == format!("{app_name}.exe") {
+    let app_name = crate::get_app_name();
+    if src_exe_filename.eq_ignore_ascii_case(&format!("{app_name}.exe")) {
         Ok("".to_owned())
     } else {
         Ok(format!(
@@ -1509,42 +1511,42 @@ fn get_after_install(
 
     let desktop_shortcuts = reg_value_desktop_shortcuts
         .map(|v| {
-            format!("reg add HKEY_CLASSES_ROOT\\.{ext} /f /v {REG_NAME_INSTALL_DESKTOPSHORTCUTS} /t REG_SZ /d \"{v}\"")
+            format!("reg add \"HKEY_CLASSES_ROOT\\.{ext}\" /f /v {REG_NAME_INSTALL_DESKTOPSHORTCUTS} /t REG_SZ /d \"{v}\"")
         })
         .unwrap_or_default();
     let start_menu_shortcuts = reg_value_start_menu_shortcuts
         .map(|v| {
             format!(
-                "reg add HKEY_CLASSES_ROOT\\.{ext} /f /v {REG_NAME_INSTALL_STARTMENUSHORTCUTS} /t REG_SZ /d \"{v}\""
+                "reg add \"HKEY_CLASSES_ROOT\\.{ext}\" /f /v {REG_NAME_INSTALL_STARTMENUSHORTCUTS} /t REG_SZ /d \"{v}\""
             )
         })
         .unwrap_or_default();
     let reg_printer = reg_value_printer
         .map(|v| {
             format!(
-                "reg add HKEY_CLASSES_ROOT\\.{ext} /f /v {REG_NAME_INSTALL_PRINTER} /t REG_SZ /d \"{v}\""
+                "reg add \"HKEY_CLASSES_ROOT\\.{ext}\" /f /v {REG_NAME_INSTALL_PRINTER} /t REG_SZ /d \"{v}\""
             )
         })
         .unwrap_or_default();
 
     format!("
     chcp 65001
-    reg add HKEY_CLASSES_ROOT\\.{ext} /f
+    reg add \"HKEY_CLASSES_ROOT\\.{ext}\" /f
     {desktop_shortcuts}
     {start_menu_shortcuts}
     {reg_printer}
-    reg add HKEY_CLASSES_ROOT\\.{ext}\\DefaultIcon /f
-    reg add HKEY_CLASSES_ROOT\\.{ext}\\DefaultIcon /f /ve /t REG_SZ  /d \"\\\"{exe}\\\",0\"
-    reg add HKEY_CLASSES_ROOT\\.{ext}\\shell /f
-    reg add HKEY_CLASSES_ROOT\\.{ext}\\shell\\open /f
-    reg add HKEY_CLASSES_ROOT\\.{ext}\\shell\\open\\command /f
-    reg add HKEY_CLASSES_ROOT\\.{ext}\\shell\\open\\command /f /ve /t REG_SZ /d \"\\\"{exe}\\\" --play \\\"%%1\\\"\"
-    reg add HKEY_CLASSES_ROOT\\{ext} /f
-    reg add HKEY_CLASSES_ROOT\\{ext} /f /v \"URL Protocol\" /t REG_SZ /d \"\"
-    reg add HKEY_CLASSES_ROOT\\{ext}\\shell /f
-    reg add HKEY_CLASSES_ROOT\\{ext}\\shell\\open /f
-    reg add HKEY_CLASSES_ROOT\\{ext}\\shell\\open\\command /f
-    reg add HKEY_CLASSES_ROOT\\{ext}\\shell\\open\\command /f /ve /t REG_SZ /d \"\\\"{exe}\\\" \\\"%%1\\\"\"
+    reg add \"HKEY_CLASSES_ROOT\\.{ext}\\DefaultIcon\" /f
+    reg add \"HKEY_CLASSES_ROOT\\.{ext}\\DefaultIcon\" /f /ve /t REG_SZ  /d \"\\\"{exe}\\\",0\"
+    reg add \"HKEY_CLASSES_ROOT\\.{ext}\\shell\" /f
+    reg add \"HKEY_CLASSES_ROOT\\.{ext}\\shell\\open\" /f
+    reg add \"HKEY_CLASSES_ROOT\\.{ext}\\shell\\open\\command\" /f
+    reg add \"HKEY_CLASSES_ROOT\\.{ext}\\shell\\open\\command\" /f /ve /t REG_SZ /d \"\\\"{exe}\\\" --play \\\"%%1\\\"\"
+    reg add \"HKEY_CLASSES_ROOT\\{ext}\" /f
+    reg add \"HKEY_CLASSES_ROOT\\{ext}\" /f /v \"URL Protocol\" /t REG_SZ /d \"\"
+    reg add \"HKEY_CLASSES_ROOT\\{ext}\\shell\" /f
+    reg add \"HKEY_CLASSES_ROOT\\{ext}\\shell\\open\" /f
+    reg add \"HKEY_CLASSES_ROOT\\{ext}\\shell\\open\\command\" /f
+    reg add \"HKEY_CLASSES_ROOT\\{ext}\\shell\\open\\command\" /f /ve /t REG_SZ /d \"\\\"{exe}\\\" \\\"%%1\\\"\"
     netsh advfirewall firewall add rule name=\"{app_name} Service\" dir=out action=allow program=\"{exe}\" enable=yes
     netsh advfirewall firewall add rule name=\"{app_name} Service\" dir=in action=allow program=\"{exe}\" enable=yes
     {create_service}
@@ -1705,20 +1707,20 @@ copy /Y \"{tmp_path}\\{app_name} Tray.lnk\" \"%PROGRAMDATA%\\Microsoft\\Windows\
 chcp 65001
 md \"{path}\"
 {copy_exe}
-reg add {subkey} /f
-reg add {subkey} /f /v DisplayIcon /t REG_SZ /d \"{display_icon}\"
-reg add {subkey} /f /v DisplayName /t REG_SZ /d \"{app_name}\"
-reg add {subkey} /f /v DisplayVersion /t REG_SZ /d \"{version}\"
-reg add {subkey} /f /v Version /t REG_SZ /d \"{version}\"
-reg add {subkey} /f /v BuildDate /t REG_SZ /d \"{build_date}\"
-reg add {subkey} /f /v InstallLocation /t REG_SZ /d \"{path}\"
-reg add {subkey} /f /v Publisher /t REG_SZ /d \"{app_name}\"
-reg add {subkey} /f /v VersionMajor /t REG_DWORD /d {version_major}
-reg add {subkey} /f /v VersionMinor /t REG_DWORD /d {version_minor}
-reg add {subkey} /f /v VersionBuild /t REG_DWORD /d {version_build}
-reg add {subkey} /f /v UninstallString /t REG_SZ /d \"\\\"{exe}\\\" --uninstall\"
-reg add {subkey} /f /v EstimatedSize /t REG_DWORD /d {size}
-reg add {subkey} /f /v WindowsInstaller /t REG_DWORD /d 0
+reg add \"{subkey}\" /f
+reg add \"{subkey}\" /f /v DisplayIcon /t REG_SZ /d \"{display_icon}\"
+reg add \"{subkey}\" /f /v DisplayName /t REG_SZ /d \"{app_name}\"
+reg add \"{subkey}\" /f /v DisplayVersion /t REG_SZ /d \"{version}\"
+reg add \"{subkey}\" /f /v Version /t REG_SZ /d \"{version}\"
+reg add \"{subkey}\" /f /v BuildDate /t REG_SZ /d \"{build_date}\"
+reg add \"{subkey}\" /f /v InstallLocation /t REG_SZ /d \"{path}\"
+reg add \"{subkey}\" /f /v Publisher /t REG_SZ /d \"{app_name}\"
+reg add \"{subkey}\" /f /v VersionMajor /t REG_DWORD /d {version_major}
+reg add \"{subkey}\" /f /v VersionMinor /t REG_DWORD /d {version_minor}
+reg add \"{subkey}\" /f /v VersionBuild /t REG_DWORD /d {version_build}
+reg add \"{subkey}\" /f /v UninstallString /t REG_SZ /d \"\\\"{exe}\\\" --uninstall\"
+reg add \"{subkey}\" /f /v EstimatedSize /t REG_DWORD /d {size}
+reg add \"{subkey}\" /f /v WindowsInstaller /t REG_DWORD /d 0
 cscript \"{mk_shortcut}\"
 cscript \"{uninstall_shortcut}\"
 {tray_shortcuts}
@@ -1763,6 +1765,7 @@ pub fn run_before_uninstall() -> ResultType<()> {
 }
 
 fn get_before_uninstall(kill_self: bool) -> String {
+    let legacy_process_cmd = legacy_install_process_cmd(kill_self);
     let app_name = crate::get_app_name();
     let ext = app_name.to_lowercase();
     let filter = if kill_self {
@@ -1773,15 +1776,16 @@ fn get_before_uninstall(kill_self: bool) -> String {
     format!(
         "
     chcp 65001
-    sc stop {app_name}
-    sc delete {app_name}
-    taskkill /F /IM {broker_exe}
-    taskkill /F /IM {app_name}.exe{filter}
-    reg delete HKEY_CLASSES_ROOT\\.{ext} /f
-    reg delete HKEY_CLASSES_ROOT\\{ext} /f
+    sc stop \"{app_name}\"
+    sc delete \"{app_name}\"
+    taskkill /F /IM \"{broker_exe}\"
+    taskkill /F /IM \"{app_name}.exe\"{filter}
+    {legacy_process_cmd}
+    reg delete \"HKEY_CLASSES_ROOT\\.{ext}\" /f
+    reg delete \"HKEY_CLASSES_ROOT\\{ext}\" /f
     netsh advfirewall firewall delete rule name=\"{app_name} Service\"
     ",
-        broker_exe = WIN_TOPMOST_INJECTED_PROCESS_EXE,
+        broker_exe = injected_process_exe(),
     )
 }
 
@@ -1819,7 +1823,7 @@ fn get_uninstall(kill_self: bool, uninstall_printer: bool) -> String {
     {before_uninstall}
     {uninstall_printer_cmd}
     {uninstall_cert_cmd}
-    reg delete {subkey} /f
+    reg delete \"{subkey}\" /f
     {uninstall_amyuni_idd}
     if exist \"{path}\" rd /s /q \"{path}\"
     if exist \"{start_menu}\" rd /s /q \"{start_menu}\"
@@ -1946,9 +1950,46 @@ pub fn add_recent_document(path: &str) {
     }
 }
 
+fn existing_install_exe(path: &str, exe: &str) -> Option<PathBuf> {
+    let exe = PathBuf::from(exe);
+    if exe.is_file() {
+        return Some(exe);
+    }
+    // Repair the unrenamed binary in this app's installation directory only.
+    let legacy_exe = Path::new(path).join("rustdesk.exe");
+    legacy_exe.is_file().then_some(legacy_exe)
+}
+
+fn legacy_install_process_cmd(kill_self: bool) -> String {
+    let (_, path, _, exe) = get_install_info();
+    let Some(installed_exe) = existing_install_exe(&path, &exe) else {
+        return String::new();
+    };
+    if installed_exe.to_string_lossy().eq_ignore_ascii_case(&exe) {
+        return String::new();
+    }
+    let system = System::new_all();
+    system
+        .processes()
+        .iter()
+        .filter_map(|(pid, process)| {
+            if (kill_self || pid.as_u32() != get_current_pid())
+                && process
+                    .exe()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(&installed_exe.to_string_lossy())
+            {
+                Some(format!("taskkill /F /PID {}\n", pid.as_u32()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 pub fn is_installed() -> bool {
-    let (_, _, _, exe) = get_install_info();
-    std::fs::metadata(exe).is_ok()
+    let (_, path, _, exe) = get_install_info();
+    existing_install_exe(&path, &exe).is_some()
 }
 
 pub fn get_reg(name: &str) -> String {
@@ -1988,9 +2029,10 @@ fn get_public_base_dir() -> PathBuf {
 
 #[inline]
 pub fn get_custom_client_staging_dir() -> PathBuf {
+    let app_name = crate::get_app_name();
     get_public_base_dir()
-        .join("RustDesk")
-        .join("RustDeskCustomClientStaging")
+        .join(&app_name)
+        .join(format!("{app_name}CustomClientStaging"))
 }
 
 /// Removes the custom client staging directory.
@@ -2145,7 +2187,7 @@ pub fn update_install_option(k: &str, v: &str) -> ResultType<()> {
     let app_name = crate::get_app_name();
     let ext = app_name.to_lowercase();
     let cmds =
-        format!("chcp 65001 && reg add HKEY_CLASSES_ROOT\\.{ext} /f /v {k} /t REG_SZ /d \"{v}\"");
+        format!("chcp 65001 && reg add \"HKEY_CLASSES_ROOT\\.{ext}\" /f /v {k} /t REG_SZ /d \"{v}\"");
     run_cmds(cmds, false, "update_install_option")?;
     Ok(())
 }
@@ -3165,14 +3207,16 @@ pub fn uninstall_service(show_new_window: bool, _: bool) -> bool {
     let cmds = format!(
         "
     chcp 65001
-    sc stop {app_name}
-    sc delete {app_name}
+    sc stop \"{app_name}\"
+    sc delete \"{app_name}\"
     if exist \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{app_name} Tray.lnk\" del /f /q \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{app_name} Tray.lnk\"
-    taskkill /F /IM {broker_exe}
-    taskkill /F /IM {app_name}.exe{filter}
+    taskkill /F /IM \"{broker_exe}\"
+    taskkill /F /IM \"{app_name}.exe\"{filter}
+    {legacy_process_cmd}
     ",
+        legacy_process_cmd = legacy_install_process_cmd(false),
         app_name = crate::get_app_name(),
-        broker_exe = WIN_TOPMOST_INJECTED_PROCESS_EXE,
+        broker_exe = injected_process_exe(),
     );
     if let Err(err) = run_cmds(cmds, false, "uninstall") {
         Config::set_option("stop-service".into(), "".into());
@@ -3195,7 +3239,7 @@ pub fn install_service() -> bool {
     let cmds = format!(
         "
 chcp 65001
-taskkill /F /IM {app_name}.exe{filter}
+taskkill /F /IM \"{app_name}.exe\"{filter}
 cscript \"{tray_shortcut}\"
 copy /Y \"{tmp_path}\\{app_name} Tray.lnk\" \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\\"
 {import_config}
@@ -3258,21 +3302,32 @@ pub fn update_me(debug: bool) -> ResultType<()> {
     let app_name = crate::get_app_name();
     let src_exe = std::env::current_exe()?.to_string_lossy().to_string();
     let (subkey, path, _, exe) = get_install_info();
-    let is_installed = std::fs::metadata(&exe).is_ok();
-    if !is_installed {
+    let Some(installed_exe) = existing_install_exe(&path, &exe) else {
         bail!("{} is not installed.", &app_name);
-    }
+    };
+    let repair_legacy_exe = !installed_exe.to_string_lossy().eq_ignore_ascii_case(&exe);
+    let legacy_process_cmd = legacy_install_process_cmd(false);
 
-    let app_exe_name = &format!("{}.exe", &app_name);
+    let app_exe_name = &installed_exe.file_name()
+        .ok_or(anyhow!("Can't get installed executable name"))?
+        .to_string_lossy().to_string();
+    let system = System::new_all();
+    let is_install_process = |pid: &Pid| {
+        !repair_legacy_exe || system.process(*pid).map(|p| {
+            p.exe().to_string_lossy().eq_ignore_ascii_case(&installed_exe.to_string_lossy())
+        }).unwrap_or(false)
+    };
     let main_window_pids =
-        crate::platform::get_pids_of_process_with_args::<_, &str>(&app_exe_name, &[]);
+        crate::platform::get_pids_of_process_with_args::<_, &str>(&app_exe_name, &[])
+            .into_iter().filter(&is_install_process).collect::<Vec<_>>();
     let main_window_sessions = main_window_pids
         .iter()
         .map(|pid| get_session_id_of_process(pid.as_u32()))
         .flatten()
         .collect::<Vec<_>>();
     kill_process_by_pids(&app_exe_name, main_window_pids)?;
-    let tray_pids = crate::platform::get_pids_of_process_with_args(&app_exe_name, &["--tray"]);
+    let tray_pids = crate::platform::get_pids_of_process_with_args(&app_exe_name, &["--tray"])
+        .into_iter().filter(&is_install_process).collect::<Vec<_>>();
     let tray_sessions = tray_pids
         .iter()
         .map(|pid| get_session_id_of_process(pid.as_u32()))
@@ -3317,20 +3372,20 @@ pub fn update_me(debug: bool) -> ResultType<()> {
             "".to_string()
         } else {
             format!(
-                "reg add {} /f /v DisplayIcon /t REG_SZ /d \"{}\"",
+                "reg add \"{}\" /f /v DisplayIcon /t REG_SZ /d \"{}\"",
                 subkey, display_icon
             )
         };
         format!(
             "
 {reg_display_icon}
-reg add {subkey} /f /v DisplayVersion /t REG_SZ /d \"{version}\"
-reg add {subkey} /f /v Version /t REG_SZ /d \"{version}\"
-reg add {subkey} /f /v BuildDate /t REG_SZ /d \"{build_date}\"
-reg add {subkey} /f /v VersionMajor /t REG_DWORD /d {version_major}
-reg add {subkey} /f /v VersionMinor /t REG_DWORD /d {version_minor}
-reg add {subkey} /f /v VersionBuild /t REG_DWORD /d {version_build}
-reg add {subkey} /f /v EstimatedSize /t REG_DWORD /d {size}
+reg add \"{subkey}\" /f /v DisplayVersion /t REG_SZ /d \"{version}\"
+reg add \"{subkey}\" /f /v Version /t REG_SZ /d \"{version}\"
+reg add \"{subkey}\" /f /v BuildDate /t REG_SZ /d \"{build_date}\"
+reg add \"{subkey}\" /f /v VersionMajor /t REG_DWORD /d {version_major}
+reg add \"{subkey}\" /f /v VersionMinor /t REG_DWORD /d {version_minor}
+reg add \"{subkey}\" /f /v VersionBuild /t REG_DWORD /d {version_build}
+reg add \"{subkey}\" /f /v EstimatedSize /t REG_DWORD /d {size}
         "
         )
     }
@@ -3366,8 +3421,22 @@ reg add {subkey} /f /v EstimatedSize /t REG_DWORD /d {size}
     };
 
     let filter = format!(" /FI \"PID ne {}\"", get_current_pid());
+    let repair_install_cmd = if repair_legacy_exe {
+        let uninstall_string = if is_msi == Some(false) {
+            format!("reg add \"{subkey}\" /f /v UninstallString /t REG_SZ /d \"\\\"{exe}\\\" --uninstall\"")
+        } else {
+            String::new()
+        };
+        format!("
+sc config \"{app_name}\" binpath= \"\\\"{exe}\\\" --service\"
+{uninstall_string}
+if exist \"{exe}\" if exist \"{path}\\rustdesk.exe\" del /f /q \"{path}\\rustdesk.exe\"
+")
+    } else {
+        String::new()
+    };
     let restore_service_cmd = if is_service_running {
-        format!("sc start {}", &app_name)
+        format!("sc start \"{}\"", &app_name)
     } else {
         "".to_owned()
     };
@@ -3399,11 +3468,12 @@ reg add {subkey} /f /v EstimatedSize /t REG_DWORD /d {size}
     let cmds = format!(
         "
 chcp 65001
-sc stop {app_name}
-taskkill /F /IM {app_name}.exe{filter}
+sc stop \"{app_name}\"
+taskkill /F /IM \"{app_name}.exe\"{filter}
+{legacy_process_cmd}
 {reg_cmd}
 {copy_exe}
-{rename_exe}
+{repair_install_cmd}
 {remove_meta_toml}
 {restore_service_cmd}
 {uninstall_printer_cmd}
@@ -3412,7 +3482,6 @@ taskkill /F /IM {app_name}.exe{filter}
     ",
         app_name = app_name,
         copy_exe = copy_exe_cmd(&src_exe, &exe, &path)?,
-        rename_exe = rename_exe_cmd(&src_exe, &path)?,
         remove_meta_toml = remove_meta_toml_cmd(is_msi.unwrap_or(true), &path),
         sleep = if debug { "timeout 300" } else { "" },
     );
@@ -3688,12 +3757,12 @@ fn get_import_config(exe: &str) -> String {
         return "".to_string();
     }
     format!("
-sc stop {app_name}
-sc delete {app_name}
-sc create {app_name} binpath= \"\\\"{exe}\\\" --import-config \\\"{config_path}\\\"\" start= auto DisplayName= \"{app_name} Service\"
-sc start {app_name}
-sc stop {app_name}
-sc delete {app_name}
+sc stop \"{app_name}\"
+sc delete \"{app_name}\"
+sc create \"{app_name}\" binpath= \"\\\"{exe}\\\" --import-config \\\"{config_path}\\\"\" start= auto DisplayName= \"{app_name} Service\"
+sc start \"{app_name}\"
+sc stop \"{app_name}\"
+sc delete \"{app_name}\"
 ",
     app_name = crate::get_app_name(),
     config_path=Config::file().to_str().unwrap_or(""),
@@ -3711,8 +3780,8 @@ if exist \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{ap
 ", app_name = crate::get_app_name())
     } else {
         format!("
-sc create {app_name} binpath= \"\\\"{exe}\\\" --service\" start= auto DisplayName= \"{app_name} Service\"
-sc start {app_name}
+sc create \"{app_name}\" binpath= \"\\\"{exe}\\\" --service\" start= auto DisplayName= \"{app_name} Service\"
+sc start \"{app_name}\"
 ",
     app_name = crate::get_app_name())
     }
@@ -3742,12 +3811,13 @@ pub fn try_remove_temp_update_files() {
     };
 
     let one_hour = std::time::Duration::from_secs(60 * 60);
+    let prefix = format!("{}-", crate::get_app_name());
     for entry in entries {
         if let Ok(entry) = entry {
             let path = entry.path();
             if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-                // Match files like rustdesk-*.msi or rustdesk-*.exe
-                if file_name.starts_with("rustdesk-")
+                // Match this app's downloaded MSI and EXE updates.
+                if file_name.starts_with(&prefix)
                     && (file_name.ends_with(".msi") || file_name.ends_with(".exe"))
                 {
                     // Skip files modified within the last hour to avoid deleting files being downloaded
@@ -3776,8 +3846,8 @@ pub fn try_kill_broker() {
     allow_err!(std::process::Command::new("cmd")
         .arg("/c")
         .arg(&format!(
-            "taskkill /F /IM {}",
-            WIN_TOPMOST_INJECTED_PROCESS_EXE
+            "taskkill /F /IM \"{}\"",
+            injected_process_exe()
         ))
         .creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
         .spawn());
@@ -3813,7 +3883,7 @@ pub fn message_box(text: &str) {
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect::<Vec<u16>>();
-    let caption = "RustDesk Output"
+    let caption = format!("{} Output", crate::get_app_name())
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect::<Vec<u16>>();
@@ -4000,7 +4070,7 @@ pub fn try_kill_rustdesk_main_window_process() -> ResultType<()> {
         log::info!("kill process success: {:?}, pid = {:?}", p.cmd(), p.pid());
         return Ok(());
     }
-    bail!("failed to find rustdesk main window process");
+    bail!("failed to find {} main window process", crate::get_app_name());
 }
 
 fn nt_terminate_process(process_id: DWORD) -> ResultType<()> {

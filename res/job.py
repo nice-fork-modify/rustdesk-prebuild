@@ -7,6 +7,13 @@ import argparse
 import logging
 import shutil
 import zipfile
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from build_config import apply_build_config
+
+build_config = apply_build_config()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -204,8 +211,9 @@ def sign_files(dir_path, only_ext=None):
         for i in range(len(only_ext)):
             if not only_ext[i].startswith("."):
                 only_ext[i] = "." + only_ext[i]
+    printer_driver_dir = f"{build_config['APP_NAME']}PrinterDriver"
     for root, dirs, files in os.walk(dir_path):
-        is_signed_dir = "RustDeskPrinterDriver" in root or "usbmmidd_v2" in root
+        is_signed_dir = printer_driver_dir in Path(root).parts or "usbmmidd_v2" in Path(root).parts
         for file in files:
             file_path = os.path.join(root, file)
             _, ext = os.path.splitext(file_path)

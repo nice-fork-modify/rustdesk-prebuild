@@ -102,6 +102,7 @@ android {
         targetSdkVersion 33
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
+        manifestPlaceholders.APP_NAME = System.getenv('APP_NAME') ?: 'RustDesk'
     }
 
     signingConfigs {

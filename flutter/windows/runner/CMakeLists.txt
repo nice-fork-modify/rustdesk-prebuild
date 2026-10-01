@@ -1,11 +1,23 @@
 cmake_minimum_required(VERSION 3.14)
 project(runner LANGUAGES CXX)
 
-# Define the application target. To change its name, change BINARY_NAME in the
-# top-level CMakeLists.txt, not the value here, or `flutter run` will no longer
-# work.
+# Define the application target with the stable BINARY_NAME from the top-level
+# CMakeLists.txt. APP_NAME controls its on-disk name.
 #
 # Any new source files that you add to the application should be added here.
+set(FILE_DESCRIPTION "${APP_NAME}")
+if("$ENV{APP_NAME}" STREQUAL "")
+  set(FILE_DESCRIPTION "RustDesk Remote Desktop")
+endif()
+set(APP_OUTPUT_NAME "${APP_NAME}")
+foreach(NAME_VARIABLE APP_NAME FILE_DESCRIPTION)
+  string(REPLACE "\\" "\\\\" ${NAME_VARIABLE} "${${NAME_VARIABLE}}")
+  string(REPLACE "\"" "\"\"" ${NAME_VARIABLE} "${${NAME_VARIABLE}}")
+  string(REPLACE "\n" "\\n" ${NAME_VARIABLE} "${${NAME_VARIABLE}}")
+  string(REPLACE "\r" "\\r" ${NAME_VARIABLE} "${${NAME_VARIABLE}}")
+endforeach()
+configure_file("Runner.rc" "${CMAKE_CURRENT_BINARY_DIR}/Runner.rc" @ONLY)
+
 add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "main.cpp"
@@ -13,9 +25,11 @@ add_executable(${BINARY_NAME} WIN32
   "win32_desktop.cpp"
   "win32_window.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
-  "Runner.rc"
+  "${CMAKE_CURRENT_BINARY_DIR}/Runner.rc"
   "runner.exe.manifest"
 )
+
+set_target_properties(${BINARY_NAME} PROPERTIES OUTPUT_NAME "${APP_OUTPUT_NAME}")
 
 # Apply the standard set of build settings. This can be removed for applications
 # that need different build settings.
@@ -34,7 +48,7 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # Add dependency libraries and include directories. Add any application-specific
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
-target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
+target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)

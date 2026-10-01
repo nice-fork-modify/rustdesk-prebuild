@@ -215,7 +215,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "/bin/sh \"$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh\" embed_and_thin";
+			shellScript = "set -e\npython3 - \"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\" <<'PY'\nimport os, plistlib, sys\npath = sys.argv[1]\nwith open(path, 'rb') as file:\n    info = plistlib.load(file)\ninfo['CFBundleDisplayName'] = info['CFBundleName'] = os.environ.get('APP_NAME') or 'RustDesk'\nwith open(path, 'wb') as file:\n    plistlib.dump(info, file)\nPY\n/bin/sh \"$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh\" embed_and_thin";
 		};
 		649B29BA4C122652F1215682 /* [CP] Embed Pods Frameworks */ = {
 			isa = PBXShellScriptBuildPhase;

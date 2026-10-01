@@ -27,8 +27,8 @@ The best open-source remote desktop client software, written in Rust.
 mkdir -p "%{buildroot}/usr/share/rustdesk" && cp -r ${HBB}/flutter/build/linux/x64/release/bundle/* -t "%{buildroot}/usr/share/rustdesk"
 mkdir -p "%{buildroot}/usr/bin"
 install -Dm 644 $HBB/res/rustdesk.service -t "%{buildroot}/usr/share/rustdesk/files"
-install -Dm 644 $HBB/res/rustdesk.desktop -t "%{buildroot}/usr/share/rustdesk/files"
-install -Dm 644 $HBB/res/rustdesk-link.desktop -t "%{buildroot}/usr/share/rustdesk/files"
+install -Dm 644 "%{buildroot}/usr/share/rustdesk/data/rustdesk.desktop" -t "%{buildroot}/usr/share/rustdesk/files"
+install -Dm 644 "%{buildroot}/usr/share/rustdesk/data/rustdesk-link.desktop" -t "%{buildroot}/usr/share/rustdesk/files"
 install -Dm 644 $HBB/res/128x128@2x.png "%{buildroot}/usr/share/icons/hicolor/256x256/apps/rustdesk.png"
 install -Dm 644 $HBB/res/scalable.svg "%{buildroot}/usr/share/icons/hicolor/scalable/apps/rustdesk.svg"
 

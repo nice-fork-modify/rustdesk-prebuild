@@ -1,3 +1,6 @@
+#[path = "res/build_config.rs"]
+mod build_config;
+
 #[cfg(windows)]
 fn build_windows() {
     let file = "src/platform/windows.cc";
@@ -77,8 +80,17 @@ fn install_android_deps() {
     println!("cargo:rustc-link-lib=OpenSLES");
 }
 
-fn main() {
+fn prepare_build_config() -> hbb_common::ResultType<build_config::BuildConfig> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("res/build-config.json");
+    let config = build_config::BuildConfig::load(&path)?;
+    let update_repository = config.value("UPDATE_REPOSITORY");
+    println!("cargo:rustc-env=UPDATE_REPOSITORY={update_repository}");
+    Ok(config)
+}
+
+fn main() -> hbb_common::ResultType<()> {
     hbb_common::gen_version();
+    prepare_build_config()?;
     install_android_deps();
     #[cfg(all(windows, feature = "inline"))]
     build_manifest();
@@ -91,4 +103,5 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=ApplicationServices");
     }
     println!("cargo:rerun-if-changed=build.rs");
+    Ok(())
 }

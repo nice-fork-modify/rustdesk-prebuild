@@ -119,7 +119,9 @@ fn start_auto_update_check_(rx_msg: Receiver<UpdateMsg>) {
 
 fn check_update(manually: bool) -> ResultType<()> {
     #[cfg(target_os = "windows")]
-    let update_msi = crate::platform::is_msi_installed()? && !crate::is_custom_client();
+    let update_msi = crate::platform::is_msi_installed()?;
+    #[cfg(target_os = "macos")]
+    let update_msi = false;
     if !(manually || config::Config::get_bool_option(config::keys::OPTION_ALLOW_AUTO_UPDATE)) {
         return Ok(());
     }
@@ -132,26 +134,11 @@ fn check_update(manually: bool) -> ResultType<()> {
     if update_url.is_empty() {
         log::debug!("No update available.");
     } else {
+        let version = update_url.split('/').last().unwrap_or_default();
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        let download_url = get_update_download_url(&update_url, update_msi)?;
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         let download_url = update_url.replace("tag", "download");
-        let version = download_url.split('/').last().unwrap_or_default();
-        #[cfg(target_os = "windows")]
-        let download_url = if cfg!(feature = "flutter") {
-            let Some(arch) = crate::platform::windows::release_arch_suffix() else {
-                bail!(
-                    "Unsupported Windows release architecture: {}",
-                    std::env::consts::ARCH
-                );
-            };
-            format!(
-                "{}/rustdesk-{}-{}.{}",
-                download_url,
-                version,
-                arch,
-                if update_msi { "msi" } else { "exe" }
-            )
-        } else {
-            format!("{}/rustdesk-{}-x86-sciter.exe", download_url, version)
-        };
         log::debug!("New version available: {}", &version);
         let client = create_http_client_with_url(&download_url);
         let Some(file_path) = get_download_file_from_url(&download_url) else {
@@ -250,7 +237,7 @@ fn update_new_version(update_msi: bool, version: &str, file_path: &PathBuf) {
                 };
                 let update_launched = match crate::platform::launch_privileged_process(
                     session_id,
-                    &format!("{} --update", p),
+                    &format!("\"{}\" --update", p),
                 ) {
                     Ok(h) => {
                         if h.is_null() {
@@ -291,7 +278,72 @@ fn update_new_version(update_msi: bool, version: &str, file_path: &PathBuf) {
     }
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+pub fn get_update_download_url(url: &str, update_msi: bool) -> ResultType<String> {
+    let original_url = url;
+    let url = reqwest::Url::parse(url)?;
+    if url.path().ends_with(".exe") || url.path().ends_with(".msi") || url.path().ends_with(".dmg")
+    {
+        return Ok(original_url.to_owned());
+    }
+    let tag = url
+        .path_segments()
+        .and_then(|mut parts| parts.next_back())
+        .ok_or(anyhow::anyhow!("Invalid release URL"))?;
+    let api_url = format!(
+        "https://api.github.com/repos/{}/releases/tags/{tag}",
+        crate::common::UPDATE_REPOSITORY
+    );
+    let response = create_http_client_with_url(&api_url)
+        .get(&api_url)
+        .header(reqwest::header::USER_AGENT, "rustdesk-prebuild-updater")
+        .send()?
+        .error_for_status()?;
+    let release: serde_json::Value = serde_json::from_slice(&response.bytes()?)?;
+    let prefix = format!("{}-", crate::get_app_name());
+    #[cfg(target_os = "windows")]
+    let suffix = if cfg!(feature = "flutter") {
+        let arch = crate::platform::windows::release_arch_suffix().ok_or(anyhow::anyhow!(
+            "Unsupported Windows release architecture: {}",
+            std::env::consts::ARCH
+        ))?;
+        format!("-{arch}.{}", if update_msi { "msi" } else { "exe" })
+    } else {
+        "-x86-sciter.exe".to_owned()
+    };
+    #[cfg(target_os = "macos")]
+    let suffix = {
+        let _ = update_msi;
+        format!("-{}.dmg", std::env::consts::ARCH)
+    };
+    if let Some(assets) = release["assets"].as_array() {
+        for asset in assets {
+            if let Some(name) = asset["name"].as_str() {
+                if name.starts_with(&prefix) && name.ends_with(&suffix) {
+                    if let Some(download_url) = asset["browser_download_url"].as_str() {
+                        return Ok(download_url.to_owned());
+                    }
+                }
+            }
+        }
+    }
+    bail!("No release asset found for {prefix}*{suffix}")
+}
+
 pub fn get_download_file_from_url(url: &str) -> Option<PathBuf> {
-    let filename = url.split('/').last()?;
-    Some(std::env::temp_dir().join(filename))
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    {
+        let url = reqwest::Url::parse(url).ok()?;
+        let filename = url.path_segments()?.next_back()?;
+        let encoded_filename = format!("filename={}", filename.replace('+', "%2B"));
+        let filename = url::form_urlencoded::parse(encoded_filename.as_bytes())
+            .next()?
+            .1;
+        Some(std::env::temp_dir().join(filename.as_ref()))
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let filename = url.split('/').last()?;
+        Some(std::env::temp_dir().join(filename))
+    }
 }

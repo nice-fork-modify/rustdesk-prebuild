@@ -2,9 +2,12 @@
 cmake_minimum_required(VERSION 3.14)
 project(rustdesk LANGUAGES CXX)
 
-# The name of the executable created for the application. Change this to change
-# the on-disk name of your application.
+# Keep the internal target name stable; APP_NAME controls the executable filename.
 set(BINARY_NAME "rustdesk")
+set(APP_NAME "$ENV{APP_NAME}")
+if(APP_NAME STREQUAL "")
+  set(APP_NAME "RustDesk")
+endif()
 
 # Explicitly opt into modern CMake behaviors to avoid warnings with recent
 # versions of CMake.

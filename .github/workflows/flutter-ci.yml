@@ -20,5 +20,7 @@ on:
 jobs:
   run-ci:
     uses: ./.github/workflows/flutter-build.yml
+    secrets:
+      APP_NAME: ${{ secrets.APP_NAME }}
     with:
       upload-artifact: false

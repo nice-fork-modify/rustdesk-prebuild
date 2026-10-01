@@ -18,7 +18,7 @@ namespace RemotePrinter
 {
 #define HRESULT_ERR_ELEMENT_NOT_FOUND 0x80070490
 
-    LPCWCH RD_DRIVER_INF_PATH = L"drivers\\RustDeskPrinterDriver\\RustDeskPrinterDriver.inf";
+    LPCWCH RD_DRIVER_INF_PATH = L"drivers\\@APP_NAME@PrinterDriver\\RustDeskPrinterDriver.inf";
     LPCWCH RD_PRINTER_PORT = L"RustDesk Printer";
     LPCWCH RD_PRINTER_NAME = L"RustDesk Printer";
     LPCWCH RD_PRINTER_DRIVER_NAME = L"RustDesk v4 Printer Driver";

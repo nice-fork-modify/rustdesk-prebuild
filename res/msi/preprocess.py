@@ -13,6 +13,11 @@ from pathlib import Path
 from itertools import chain
 import shutil
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from build_config import apply_build_config
+
+build_config = apply_build_config()
+
 g_indent_unit = "\t"
 g_version = ""
 g_build_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -73,7 +78,7 @@ def make_parser():
         help='Connection type, e.g. "incoming", "outgoing". Default is empty, means incoming-outgoing',
     )
     parser.add_argument(
-        "--app-name", type=str, default="RustDesk", help="The app name."
+        "--app-name", type=str, default=build_config["APP_NAME"], help="The app name."
     )
     parser.add_argument(
         "-v", "--version", type=str, default="", help="The app version."
@@ -152,7 +157,7 @@ def gen_auto_component(app_name, dist_dir):
 
 def gen_pre_vars(args, dist_dir):
     def func(lines, index_start):
-        upgrade_code = uuid.uuid5(uuid.NAMESPACE_OID, app_name + ".exe")
+        upgrade_code = uuid.UUID(build_config["MSI_UPGRADE_CODE"])
 
         indent = g_indent_unit * 1
         to_insert_lines = [
@@ -195,8 +200,12 @@ def replace_app_name_in_custom_actions(app_name):
         with open(file_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
         for i, line in enumerate(lines):
-            line = re.sub(r"\bRustDesk\b", app_name, line)
+            line = re.sub(r"\bRustDesk\b", lambda _: app_name, line)
             line = line.replace(f"{app_name} v4 Printer Driver", "RustDesk v4 Printer Driver")
+            if file_path.name == "RemotePrinter.cpp" and "LPCWCH RD_DRIVER_INF_PATH = " in line:
+                line = f'    LPCWCH RD_DRIVER_INF_PATH = L"drivers\\\\{app_name}PrinterDriver\\\\RustDeskPrinterDriver.inf";\n'
+            elif file_path.name == "CustomActions.cpp" and 'DeleteRuntimeGeneratedFile(installFolder, L"RuntimeBroker_' in line:
+                line = f'    DeleteRuntimeGeneratedFile(installFolder, L"RuntimeBroker_{app_name}.exe");\n'
             lines[i] = line
         with open(file_path, "w", encoding="utf-8") as f:
             f.writelines(lines)
@@ -459,7 +468,7 @@ def init_global_vars(dist_dir, app_name, args):
 
     def read_process_output(args):
         process = subprocess.Popen(
-            f"{dist_app} {args}",
+            f'"{dist_app}" {args}',
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             shell=True,
@@ -499,7 +508,6 @@ def update_license_file(app_name):
         license_content = f.read()
     license_content = license_content.replace("website rustdesk.com and other ", "")
     license_content = license_content.replace("RustDesk", app_name)
-    license_content = re.sub(r"Purslane(?: Tech Pte\.)? Ltd", app_name, license_content, flags=re.IGNORECASE)
     with open(license_file, "w", encoding="utf-8") as f:
         f.write(license_content)
 

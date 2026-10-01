@@ -7,7 +7,9 @@ pub use setup::{
 };
 
 #[cfg(target_os = "windows")]
-const RD_DRIVER_INF_PATH: &str = "drivers/RustDeskPrinterDriver/RustDeskPrinterDriver.inf";
+fn get_driver_inf_path(app_name: &str) -> String {
+    format!("drivers/{app_name}PrinterDriver/RustDeskPrinterDriver.inf")
+}
 
 #[cfg(target_os = "windows")]
 fn get_printer_name(app_name: &str) -> Vec<u16> {

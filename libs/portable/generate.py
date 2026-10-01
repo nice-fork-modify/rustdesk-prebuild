@@ -6,6 +6,13 @@ import subprocess
 from hashlib import md5
 import brotli
 import datetime
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'res'))
+from build_config import apply_build_config
+
+build_config = apply_build_config()
 
 # 4GB maximum
 length_count = 4
@@ -87,7 +94,7 @@ if __name__ == '__main__':
     parser.add_option("-o", "--output", dest="output_folder",
                       help="the root of portable packer project, default is './'")
     parser.add_option("-e", "--executable", dest="executable",
-                      help="specify startup file in --folder, default is rustdesk.exe")
+                      help="specify startup file in --folder, default is APP_NAME.exe (RustDesk.exe if unset)")
     parser.add_option("-t", "--target", dest="target",
                       help="the target used by cargo")
     parser.add_option("-l", "--level", dest="level", type="int",
@@ -97,7 +104,7 @@ if __name__ == '__main__':
     output_folder = os.path.abspath(options.output_folder or './')
 
     if not options.executable:
-        options.executable = 'rustdesk.exe'
+        options.executable = f"{build_config['APP_NAME']}.exe"
     if not options.executable.startswith(folder):
         options.executable = folder + '/' + options.executable
     exe: str = os.path.abspath(options.executable)

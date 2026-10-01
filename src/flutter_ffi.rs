@@ -2845,6 +2845,23 @@ pub fn main_get_common(key: String) -> String {
     } else if key == "local-permanent-password-set" {
         return ui_interface::is_local_permanent_password_set().to_string();
     } else {
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        if let Some(url) = key.strip_prefix("update-download-url-") {
+            #[cfg(target_os = "windows")]
+            let update_msi = match crate::platform::windows::is_msi_installed() {
+                Ok(installed) => installed,
+                Err(e) => {
+                    log::error!("Failed to check if is msi: {}", e);
+                    return "error:update-failed-check-msi-tip".to_owned();
+                }
+            };
+            #[cfg(target_os = "macos")]
+            let update_msi = false;
+            return match crate::updater::get_update_download_url(url, update_msi) {
+                Ok(url) => url,
+                Err(e) => format!("error:{e}"),
+            };
+        }
         if key.starts_with("download-data-") {
             let id = key.replace("download-data-", "");
             match crate::hbbs_http::downloader::get_download_data(&id) {
@@ -2854,41 +2871,7 @@ pub fn main_get_common(key: String) -> String {
                 }
             }
         } else if key.starts_with("download-file-") {
-            let _version = key.replace("download-file-", "");
-            #[cfg(target_os = "windows")]
-            return match (
-                crate::platform::windows::is_msi_installed(),
-                crate::common::is_custom_client(),
-            ) {
-                (Ok(true), false) => match crate::platform::windows::release_arch_suffix() {
-                    Some(arch) => format!("rustdesk-{_version}-{arch}.msi"),
-                    None => "error:unsupported".to_owned(),
-                },
-                (Ok(true), true) | (Ok(false), _) => {
-                    match crate::platform::windows::release_arch_suffix() {
-                        Some(arch) => format!("rustdesk-{_version}-{arch}.exe"),
-                        None => "error:unsupported".to_owned(),
-                    }
-                }
-                (Err(e), _) => {
-                    log::error!("Failed to check if is msi: {}", e);
-                    format!("error:update-failed-check-msi-tip")
-                }
-            };
-            #[cfg(target_os = "macos")]
-            {
-                return if cfg!(target_arch = "x86_64") {
-                    format!("rustdesk-{_version}-x86_64.dmg")
-                } else if cfg!(target_arch = "aarch64") {
-                    format!("rustdesk-{_version}-aarch64.dmg")
-                } else {
-                    "error:unsupported".to_owned()
-                };
-            }
-            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-            {
-                "error:unsupported".to_owned()
-            }
+            "error:unsupported".to_owned()
         } else {
             "".to_owned()
         }

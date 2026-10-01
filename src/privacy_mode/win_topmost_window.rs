@@ -30,8 +30,9 @@ use winapi::{
 pub(super) const PRIVACY_MODE_IMPL: &str = "privacy_mode_impl_mag";
 
 pub const ORIGIN_PROCESS_EXE: &'static str = "C:\\Windows\\System32\\RuntimeBroker.exe";
-pub const WIN_TOPMOST_INJECTED_PROCESS_EXE: &'static str = "RuntimeBroker_rustdesk.exe";
-pub const INJECTED_PROCESS_EXE: &'static str = WIN_TOPMOST_INJECTED_PROCESS_EXE;
+pub fn injected_process_exe() -> String {
+    format!("RuntimeBroker_{}.exe", crate::get_app_name())
+}
 pub(super) const PRIVACY_WINDOW_CLASS: &'static str = "RustDeskPrivacyWindowClass";
 pub(super) const PRIVACY_WINDOW_NAME: &'static str = "RustDeskPrivacyWindow";
 const PRIVACY_WINDOW_WAIT_MILLIS: u128 = 1_000;
@@ -221,12 +222,13 @@ impl PrivacyModeImpl {
 
         // let cmdline = cur_dir.join("MiniBroker.exe").to_string_lossy().to_string();
         let cmdline = cur_dir
-            .join(INJECTED_PROCESS_EXE)
+            .join(injected_process_exe())
             .to_string_lossy()
             .to_string();
 
         unsafe {
-            let cmd_utf16: Vec<u16> = cmdline.encode_utf16().chain(Some(0).into_iter()).collect();
+            let cmd_utf16: Vec<u16> = format!("\"{cmdline}\"")
+                .encode_utf16().chain(Some(0).into_iter()).collect();
 
             let mut start_info = STARTUPINFOW {
                 cb: 0,

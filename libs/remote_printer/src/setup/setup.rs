@@ -11,12 +11,12 @@ lazy_static::lazy_static!(
     static ref SETUP_MTX: Mutex<()> = Mutex::new(());
 );
 
-fn get_driver_inf_abs_path() -> ResultType<PathBuf> {
-    use crate::RD_DRIVER_INF_PATH;
+fn get_driver_inf_abs_path(app_name: &str) -> ResultType<PathBuf> {
+    let driver_inf_path = crate::get_driver_inf_path(app_name);
 
     let exe_file = std::env::current_exe()?;
     let abs_path = match exe_file.parent() {
-        Some(parent) => parent.join(RD_DRIVER_INF_PATH),
+        Some(parent) => parent.join(&driver_inf_path),
         None => bail!(
             "Invalid exe parent for {}",
             exe_file.to_string_lossy().as_ref()
@@ -25,7 +25,7 @@ fn get_driver_inf_abs_path() -> ResultType<PathBuf> {
     if !abs_path.exists() {
         bail!(
             "The driver inf file \"{}\" does not exists",
-            RD_DRIVER_INF_PATH
+            &driver_inf_path
         )
     }
     Ok(abs_path)
@@ -49,7 +49,7 @@ pub fn install_update_printer(app_name: &str) -> ResultType<()> {
     let rd_printer_driver_name = PCWSTR::from_raw(driver_name.as_ptr());
     let rd_printer_port = PCWSTR::from_raw(port.as_ptr());
 
-    let inf_file = get_driver_inf_abs_path()?;
+    let inf_file = get_driver_inf_abs_path(app_name)?;
     let inf_file: Vec<u16> = inf_file
         .to_string_lossy()
         .as_ref()

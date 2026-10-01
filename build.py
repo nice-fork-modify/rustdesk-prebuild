@@ -11,9 +11,15 @@ import argparse
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / 'res'))
+from build_config import apply_build_config
+
+build_config = apply_build_config()
+
 windows = platform.platform().startswith('Windows')
 osx = platform.platform().startswith(
     'Darwin') or platform.platform().startswith("macOS")
+app_name = build_config['APP_NAME']
 hbb_name = 'rustdesk' + ('.exe' if windows else '')
 exe_path = 'target/release/' + hbb_name
 if windows:
@@ -340,10 +346,8 @@ def build_flutter_deb(version, features):
         'cp ../res/128x128@2x.png tmpdeb/usr/share/icons/hicolor/256x256/apps/rustdesk.png')
     system2(
         'cp ../res/scalable.svg tmpdeb/usr/share/icons/hicolor/scalable/apps/rustdesk.svg')
-    system2(
-        'cp ../res/rustdesk.desktop tmpdeb/usr/share/applications/rustdesk.desktop')
-    system2(
-        'cp ../res/rustdesk-link.desktop tmpdeb/usr/share/applications/rustdesk-link.desktop')
+    shutil.copy2(f'{flutter_build_dir}/data/rustdesk.desktop', 'tmpdeb/usr/share/applications/rustdesk.desktop')
+    shutil.copy2(f'{flutter_build_dir}/data/rustdesk-link.desktop', 'tmpdeb/usr/share/applications/rustdesk-link.desktop')
     system2(
         'cp ../res/startwm.sh tmpdeb/etc/rustdesk/')
     system2(
@@ -361,7 +365,7 @@ def build_flutter_deb(version, features):
 
     system2('/bin/rm -rf tmpdeb/')
     system2('/bin/rm -rf ../res/DEBIAN/control')
-    os.rename('rustdesk.deb', '../rustdesk-%s.deb' % version)
+    os.rename('rustdesk.deb', f'../{app_name}-{version}.deb')
     os.chdir("..")
 
 
@@ -383,10 +387,8 @@ def build_deb_from_folder(version, binary_folder):
         'cp ../res/128x128@2x.png tmpdeb/usr/share/icons/hicolor/256x256/apps/rustdesk.png')
     system2(
         'cp ../res/scalable.svg tmpdeb/usr/share/icons/hicolor/scalable/apps/rustdesk.svg')
-    system2(
-        'cp ../res/rustdesk.desktop tmpdeb/usr/share/applications/rustdesk.desktop')
-    system2(
-        'cp ../res/rustdesk-link.desktop tmpdeb/usr/share/applications/rustdesk-link.desktop')
+    shutil.copy2('../res/rustdesk.desktop', 'tmpdeb/usr/share/applications/rustdesk.desktop')
+    shutil.copy2('../res/rustdesk-link.desktop', 'tmpdeb/usr/share/applications/rustdesk-link.desktop')
     system2(
         "echo \"#!/bin/sh\" >> tmpdeb/usr/share/rustdesk/files/polkit && chmod a+x tmpdeb/usr/share/rustdesk/files/polkit")
 
@@ -398,7 +400,7 @@ def build_deb_from_folder(version, binary_folder):
 
     system2('/bin/rm -rf tmpdeb/')
     system2('/bin/rm -rf ../res/DEBIAN/control')
-    os.rename('rustdesk.deb', '../rustdesk-%s.deb' % version)
+    os.rename('rustdesk.deb', f'../{app_name}-{version}.deb')
     os.chdir("..")
 
 
@@ -416,8 +418,8 @@ def build_flutter_dmg(version, features):
     # FLUTTER_XCODE_* env vars are forwarded to xcodebuild as build settings.
     mac_arch = 'arm64' if platform.machine().lower() in ('arm64', 'aarch64') else 'x86_64'
     system2(
-        f'FLUTTER_XCODE_ARCHS={mac_arch} FLUTTER_XCODE_ONLY_ACTIVE_ARCH=YES flutter build macos --release')
-    system2('cp -rf ../target/release/service ./build/macos/Build/Products/Release/RustDesk.app/Contents/MacOS/')
+        f'FLUTTER_XCODE_APP_NAME="{app_name}" FLUTTER_XCODE_ARCHS={mac_arch} FLUTTER_XCODE_ONLY_ACTIVE_ARCH=YES flutter build macos --release')
+    system2(f'cp -rf ../target/release/service "./build/macos/Build/Products/Release/{app_name}.app/Contents/MacOS/"')
     '''
     system2(
         "create-dmg --volname \"RustDesk Installer\" --window-pos 200 120 --window-size 800 400 --icon-size 100 --app-drop-link 600 185 --icon RustDesk.app 200 190 --hide-extension RustDesk.app rustdesk.dmg ./build/macos/Build/Products/Release/RustDesk.app")
@@ -453,19 +455,14 @@ def build_flutter_windows(version, features, skip_portable_pack):
     os.chdir('libs/portable')
     system2('pip3 install -r requirements.txt')
     system2(
-        f'python3 ./generate.py -f ../../{flutter_build_dir_2} -o . -e ../../{flutter_build_dir_2}/rustdesk.exe')
+        f'python3 ./generate.py -f "../../{flutter_build_dir_2}" -o . -e "../../{flutter_build_dir_2}/{app_name}.exe"')
     os.chdir('../..')
-    if os.path.exists('./rustdesk_portable.exe'):
-        os.replace('./target/release/rustdesk-portable-packer.exe',
-                   './rustdesk_portable.exe')
-    else:
-        os.rename('./target/release/rustdesk-portable-packer.exe',
-                  './rustdesk_portable.exe')
-    print(
-        f'output location: {os.path.abspath(os.curdir)}/rustdesk_portable.exe')
-    os.rename('./rustdesk_portable.exe', f'./rustdesk-{version}-install.exe')
-    print(
-        f'output location: {os.path.abspath(os.curdir)}/rustdesk-{version}-install.exe')
+    portable_exe = f'./{app_name}_portable.exe'
+    os.replace('./target/release/rustdesk-portable-packer.exe', portable_exe)
+    print(f'output location: {os.path.abspath(portable_exe)}')
+    installer_exe = f'./{app_name}-{version}-install.exe'
+    os.rename(portable_exe, installer_exe)
+    print(f'output location: {os.path.abspath(installer_exe)}')
 
 
 def main():
@@ -503,23 +500,24 @@ def main():
             return
         system2('cargo build --locked --release --features ' + features)
         # system2('upx.exe target/release/rustdesk.exe')
-        system2('mv target/release/rustdesk.exe target/release/RustDesk.exe')
+        os.replace('target/release/rustdesk.exe', f'target/release/{app_name}.exe')
         pa = os.environ.get('P')
         if pa:
             # https://certera.com/kb/tutorial-guide-for-safenet-authentication-client-for-code-signing/
             system2(
                 f'signtool sign /a /v /p {pa} /debug /f .\\cert.pfx /t http://timestamp.digicert.com  '
-                'target\\release\\rustdesk.exe')
+                f'"target\\release\\{app_name}.exe"')
         else:
             print('Not signed')
         os.makedirs(res_dir, exist_ok=True)
-        system2(
-            f'cp -rf target/release/RustDesk.exe {res_dir}')
+        shutil.copy2(f'target/release/{app_name}.exe', res_dir)
         os.chdir('libs/portable')
         system2('pip3 install -r requirements.txt')
         system2(
-            f'python3 ./generate.py -f ../../{res_dir} -o . -e ../../{res_dir}/rustdesk-{version}-win7-install.exe')
-        system2(f'mv ../../{res_dir}/rustdesk-{version}-win7-install.exe ../..')
+            f'python3 ./generate.py -f "../../{res_dir}" -o . -e "../../{res_dir}/{app_name}.exe"')
+        os.chdir('../..')
+        os.replace('target/release/rustdesk-portable-packer.exe',
+                   f'{app_name}-{version}-win7-install.exe')
     elif os.path.isfile('/usr/bin/pacman'):
         # pacman -S -needed base-devel
         system2("sed -i 's/pkgver=.*/pkgver=%s/g' res/PKGBUILD" % version)
@@ -531,8 +529,8 @@ def main():
             system2('strip target/release/rustdesk')
             system2('ln -s res/pacman_install && ln -s res/PKGBUILD')
             system2('HBB=`pwd` makepkg -f')
-        system2('mv rustdesk-%s-0-x86_64.pkg.tar.zst rustdesk-%s-manjaro-arch.pkg.tar.zst' % (
-            version, version))
+        os.rename(f'rustdesk-{version}-0-x86_64.pkg.tar.zst',
+                  f'{app_name}-{version}-manjaro-arch.pkg.tar.zst')
         # pacman -U ./rustdesk.pkg.tar.zst
     elif os.path.isfile('/usr/bin/yum'):
         system2('cargo build --locked --release --features ' + features)
@@ -541,8 +539,7 @@ def main():
             "sed -i 's/Version:    .*/Version:    %s/g' res/rpm.spec" % version)
         system2('HBB=`pwd` rpmbuild -ba res/rpm.spec')
         system2(
-            'mv $HOME/rpmbuild/RPMS/x86_64/rustdesk-%s-0.x86_64.rpm ./rustdesk-%s-fedora28-centos8.rpm' % (
-                version, version))
+            f'mv "$HOME/rpmbuild/RPMS/x86_64/rustdesk-{version}-0.x86_64.rpm" "./{app_name}-{version}-fedora28-centos8.rpm"')
         # yum localinstall rustdesk.rpm
     elif os.path.isfile('/usr/bin/zypper'):
         system2('cargo build --locked --release --features ' + features)
@@ -551,8 +548,7 @@ def main():
             "sed -i 's/Version:    .*/Version:    %s/g' res/rpm-suse.spec" % version)
         system2('HBB=`pwd` rpmbuild -ba res/rpm-suse.spec')
         system2(
-            'mv $HOME/rpmbuild/RPMS/x86_64/rustdesk-%s-0.x86_64.rpm ./rustdesk-%s-suse.rpm' % (
-                version, version))
+            f'mv "$HOME/rpmbuild/RPMS/x86_64/rustdesk-{version}-0.x86_64.rpm" "./{app_name}-{version}-suse.rpm"')
         # yum localinstall rustdesk.rpm
     else:
         if flutter:
@@ -566,10 +562,11 @@ def main():
         else:
             system2('cargo --locked bundle --release --features ' + features)
             if osx:
-                system2(
-                    'strip target/release/bundle/osx/RustDesk.app/Contents/MacOS/rustdesk')
-                system2(
-                    'cp libsciter.dylib target/release/bundle/osx/RustDesk.app/Contents/MacOS/')
+                app_bundle = f'target/release/bundle/osx/{app_name}.app'
+                if app_name != 'RustDesk':
+                    os.rename('target/release/bundle/osx/RustDesk.app', app_bundle)
+                system2(f'strip "{app_bundle}/Contents/MacOS/rustdesk"')
+                system2(f'cp libsciter.dylib "{app_bundle}/Contents/MacOS/"')
                 # https://github.com/sindresorhus/create-dmg
                 system2('/bin/rm -rf *.dmg')
                 pa = os.environ.get('P')
@@ -581,13 +578,14 @@ def main():
     #rcodesign sign --p12-file ~/.p12/rustdesk-developer-id.p12 --p12-password-file ~/.p12/.cert-pass --code-signature-flags runtime ./target/release/bundle/osx/RustDesk.app/Contents/MacOS/libsciter.dylib
     #rcodesign sign --p12-file ~/.p12/rustdesk-developer-id.p12 --p12-password-file ~/.p12/.cert-pass --code-signature-flags runtime ./target/release/bundle/osx/RustDesk.app
     # goto "Keychain Access" -> "My Certificates" for below id which starts with "Developer ID Application:"
-    codesign -s "Developer ID Application: {0}" --force --options runtime  ./target/release/bundle/osx/RustDesk.app/Contents/MacOS/*
-    codesign -s "Developer ID Application: {0}" --force --options runtime  ./target/release/bundle/osx/RustDesk.app
-    '''.format(pa))
+    codesign -s "Developer ID Application: {0}" --force --options runtime  "./target/release/bundle/osx/{1}.app/Contents/MacOS/"*
+    codesign -s "Developer ID Application: {0}" --force --options runtime  "./target/release/bundle/osx/{1}.app"
+    '''.format(pa, app_name))
                 system2(
-                    'create-dmg "RustDesk %s.dmg" "target/release/bundle/osx/RustDesk.app"' % version)
-                os.rename('RustDesk %s.dmg' %
-                          version, 'rustdesk-%s.dmg' % version)
+                    f'create-dmg "{app_name} {version}.dmg" "{app_bundle}"')
+                mac_arch = 'aarch64' if platform.machine().lower() in ('arm64', 'aarch64') else 'x86_64'
+                os.rename(f'{app_name} {version}.dmg',
+                          f'{app_name}-{version}-{mac_arch}.dmg')
                 if pa:
                     system2('''
     # https://pyoxidizer.readthedocs.io/en/apple-codesign-0.14.0/apple_codesign.html
@@ -595,13 +593,13 @@ def main():
     # https://developer.apple.com/developer-id/
     # goto xcode and login with apple id, manager certificates (Developer ID Application and/or Developer ID Installer) online there (only download and double click (install) cer file can not export p12 because no private key)
     #rcodesign sign --p12-file ~/.p12/rustdesk-developer-id.p12 --p12-password-file ~/.p12/.cert-pass --code-signature-flags runtime ./rustdesk-{1}.dmg
-    codesign -s "Developer ID Application: {0}" --force --options runtime ./rustdesk-{1}.dmg
+    codesign -s "Developer ID Application: {0}" --force --options runtime "./{2}-{1}-{3}.dmg"
     # https://appstoreconnect.apple.com/access/api
     # https://gregoryszorc.com/docs/apple-codesign/stable/apple_codesign_getting_started.html#apple-codesign-app-store-connect-api-key
     # p8 file is generated when you generate api key (can download only once)
-    rcodesign notary-submit --api-key-path ../.p12/api-key.json  --staple rustdesk-{1}.dmg
+    rcodesign notary-submit --api-key-path ../.p12/api-key.json  --staple "{2}-{1}-{3}.dmg"
     # verify:  spctl -a -t exec -v /Applications/RustDesk.app
-    '''.format(pa, version))
+    '''.format(pa, version, app_name, mac_arch))
                 else:
                     print('Not signed')
             else:
@@ -635,7 +633,7 @@ def main():
                 system2('cp libsciter-gtk.so tmpdeb/usr/share/rustdesk/')
                 md5_file_folder("tmpdeb/")
                 system2('dpkg-deb -b tmpdeb rustdesk.deb; /bin/rm -rf tmpdeb/')
-                os.rename('rustdesk.deb', 'rustdesk-%s.deb' % version)
+                os.rename('rustdesk.deb', f'{app_name}-{version}.deb')
 
 
 def md5_file(fn):

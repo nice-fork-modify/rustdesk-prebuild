@@ -9,6 +9,9 @@ on:
       upload-tag:
         type: string
         default: "nightly"
+    secrets:
+      APP_NAME:
+        required: false
 
 # NOTE: F-Droid builder script 'flutter/build_fdroid.sh' reads environment
 # variables from this workflow!
@@ -18,6 +21,7 @@ on:
 # in this file!
 
 env:
+  APP_NAME: "${{ secrets.APP_NAME || 'RustDesk' }}"
   SCITER_RUST_VERSION: "1.75" # https://github.com/rustdesk/rustdesk/discussions/7503, also 1.78 has ABI change which causes our sciter version not working, https://blog.rust-lang.org/2024/03/30/i128-layout-update.html
   RUST_VERSION: "1.75" # sciter failed on m1 with 1.78 because of https://blog.rust-lang.org/2024/03/30/i128-layout-update.html
   MAC_RUST_VERSION: "1.81" # 1.81 is requred for macos, because of https://github.com/yury/cidre requires 1.81
@@ -117,6 +121,10 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
+
+      - name: Load public build configuration
+        shell: bash
+        run: python3 res/build_config.py --github-env
 
       - name: Restore bridge files
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -253,16 +261,16 @@ jobs:
 
       - name: Build rustdesk
         run: |
+          # flutter/assets/icon.png is ignored in the source tree; derive it from the tracked icon
+          Copy-Item -LiteralPath .\res\icon.png -Destination .\flutter\assets\icon.png -Force
           # Windows: build RustDesk
           # --hwcodec is shared by all Windows targets; per-target extras (e.g. --vram) come from the matrix
           python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec ${{ matrix.job.build-args }}
           mv ./flutter/build/windows/${{ matrix.job.flutter-arch }}/runner/Release ./rustdesk
 
-          # Download usbmmidd_v2.zip and extract it to ./rustdesk
+          # Download the complete usbmmidd_v2 directory and extract it to ./rustdesk
           Invoke-WebRequest -Uri https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip -OutFile usbmmidd_v2.zip
           Expand-Archive usbmmidd_v2.zip -DestinationPath .
-          Remove-Item -Path usbmmidd_v2\Win32 -Recurse
-          Remove-Item -Path "usbmmidd_v2\deviceinstaller64.exe", "usbmmidd_v2\deviceinstaller.exe", "usbmmidd_v2\usbmmidd.bat"
           mv -Force .\usbmmidd_v2 ./rustdesk
 
           # Download printer driver files and extract them to ./rustdesk
@@ -280,7 +288,7 @@ jobs:
                 Write-Output "rustdesk_printer_driver_v4-1.4, checksums match, extract the file."
                 Expand-Archive rustdesk_printer_driver_v4-1.4.zip -DestinationPath .
                 mkdir ./rustdesk/drivers
-                mv -Force .\rustdesk_printer_driver_v4-1.4 ./rustdesk/drivers/RustDeskPrinterDriver
+                mv -Force .\rustdesk_printer_driver_v4-1.4 "./rustdesk/drivers/$($env:APP_NAME)PrinterDriver"
                 Expand-Archive printer_driver_adapter.zip -DestinationPath .
                 mv -Force .\printer_driver_adapter.dll ./rustdesk
             } elseif ($checksum_driver -ne $downloadsum_driver.Hash) {
@@ -319,7 +327,7 @@ jobs:
         if: env.UPLOAD_ARTIFACT == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rustdesk-unsigned-windows-${{ matrix.job.arch }}
+          name: ${{ env.APP_NAME }}-unsigned-windows-${{ matrix.job.arch }}
           path: rustdesk
 
       - name: Sign rustdesk files
@@ -329,6 +337,12 @@ jobs:
           pip3 install requests argparse
           BASE_URL=${{ env.SIGN_BASE_URL }} SECRET_KEY=${{ secrets.SIGN_SECRET_KEY }} python3 res/job.py sign_files ./rustdesk/
 
+      - name: Archive complete Windows runtime
+        if: env.UPLOAD_ARTIFACT == 'true'
+        run: |
+          New-Item -ItemType Directory -Force ./SignOutput | Out-Null
+          tar.exe -a -cf "./SignOutput/$env:APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}.zip" -C ./rustdesk .
+
       - name: Build self-extracted executable
         shell: bash
         if: env.UPLOAD_ARTIFACT == 'true'
@@ -336,10 +350,10 @@ jobs:
           sed -i '/dpiAware/d' res/manifest.xml
           pushd ./libs/portable
           pip3 install -r requirements.txt
-          python3 ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk/rustdesk.exe
+          python3 ./generate.py -f ../../rustdesk/ -o . -e "../../rustdesk/$APP_NAME.exe"
           popd
           mkdir -p ./SignOutput
-          mv ./target/release/rustdesk-portable-packer.exe ./SignOutput/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.exe
+          mv ./target/release/rustdesk-portable-packer.exe "./SignOutput/$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}.exe"
 
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
@@ -351,13 +365,13 @@ jobs:
         if: env.UPLOAD_ARTIFACT == 'true'
         run: |
           pushd ./res/msi
-          python preprocess.py --arp -d ../../rustdesk
+          python preprocess.py --arp -d ../../rustdesk --app-name "$env:APP_NAME"
           nuget restore msi.sln
           $msiPlatform = if ('${{ matrix.job.arch }}' -eq 'aarch64') { 'ARM64' } else { 'x64' }
           msbuild msi.sln -p:Configuration=Release -p:Platform=$msiPlatform /p:TargetVersion=Windows10
           $msi = Get-ChildItem ./Package/bin/*/Release/en-us/Package.msi | Select-Object -First 1
-          mv $msi.FullName ../../SignOutput/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.msi
-          sha256sum ../../SignOutput/rustdesk-*.msi
+          mv $msi.FullName "../../SignOutput/$env:APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}.msi"
+          sha256sum "../../SignOutput/$env:APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}.msi"
 
       - name: Sign rustdesk self-extracted file
         if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != '-2'
@@ -371,9 +385,11 @@ jobs:
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
+          target_commitish: ${{ github.sha }}
           files: |
-            ./SignOutput/rustdesk-*.msi
-            ./SignOutput/rustdesk-*.exe
+            ./SignOutput/${{ env.APP_NAME }}-*.msi
+            ./SignOutput/${{ env.APP_NAME }}-*.exe
+            ./SignOutput/${{ env.APP_NAME }}-*.zip
 
   # The fallback for the flutter version, we use Sciter for 32bit Windows.
   build-for-windows-sciter:
@@ -407,17 +423,20 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Load public build configuration
+        shell: bash
+        run: python3 res/build_config.py --github-env
+
       - name: Install LLVM and Clang
         uses: rustdesk-org/install-llvm-action-32bit@6aa7d9ad3df84dff01cd4596dd0fc880a7f47fce # no release tag; commit 2026-05-26
         with:
           version: ${{ env.LLVM_VERSION }}
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with:
-          toolchain: nightly-2023-10-13-${{ matrix.job.target }} # must use nightly here, because of abi_thiscall feature required
-          targets: ${{ matrix.job.target }}
-          components: "rustfmt"
+        shell: bash
+        run: |
+          rustup toolchain install nightly-2023-10-13-${{ matrix.job.target }} --profile minimal --component rustfmt --target ${{ matrix.job.target }} --force-non-host
+          rustup default nightly-2023-10-13-${{ matrix.job.target }} --force-non-host
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
@@ -460,7 +479,7 @@ jobs:
           cargo update -p sciter-rs --precise 674e07d3066ca9a92ced3816203ab6b652629d1e
           cargo build --locked --features inline,vram,hwcodec --release --bins
           mkdir -p ./Release
-          mv ./target/release/rustdesk.exe ./Release/rustdesk.exe
+          mv ./target/release/rustdesk.exe "./Release/$APP_NAME.exe"
           curl -LJ -o ./Release/sciter.dll https://github.com/c-smile/sciter-sdk/raw/master/bin.win/x32/sciter.dll
           echo "output_folder=./Release" >> $GITHUB_OUTPUT
           curl -LJ -o ./usbmmidd_v2.zip https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip
@@ -491,7 +510,7 @@ jobs:
         if: env.UPLOAD_ARTIFACT == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rustdesk-unsigned-windows-${{ matrix.job.arch }}
+          name: ${{ env.APP_NAME }}-unsigned-windows-${{ matrix.job.arch }}
           path: Release
 
       - name: Sign rustdesk files
@@ -507,10 +526,10 @@ jobs:
           sed -i '/dpiAware/d' res/manifest.xml
           pushd ./libs/portable
           pip3 install -r requirements.txt
-          python3 ./generate.py -f ../../Release/ -o . -e ../../Release/rustdesk.exe
+          python3 ./generate.py -f ../../Release/ -o . -e "../../Release/$APP_NAME.exe"
           popd
           mkdir -p ./SignOutput
-          mv ./target/release/rustdesk-portable-packer.exe ./SignOutput/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.exe
+          mv ./target/release/rustdesk-portable-packer.exe "./SignOutput/$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.exe"
 
       - name: Sign rustdesk self-extracted file
         if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != '-2'
@@ -524,8 +543,9 @@ jobs:
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
+          target_commitish: ${{ github.sha }}
           files: |
-            ./SignOutput/rustdesk-*.exe
+            ./SignOutput/${{ env.APP_NAME }}-*.exe
 
   build-rustdesk-ios:
     if: ${{ inputs.upload-artifact }}
@@ -557,6 +577,10 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
+
+      - name: Load public build configuration
+        shell: bash
+        run: python3 res/build_config.py --github-env
 
       - name: Install flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
@@ -682,6 +706,10 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
+
+      - name: Load public build configuration
+        shell: bash
+        run: python3 res/build_config.py --github-env
 
       - name: Import the codesign cert
         if: env.MACOS_P12_BASE64 != null
@@ -814,7 +842,7 @@ jobs:
             sed -i -e "s/osx_minimum_system_version = \"[0-9]*.[0-9]*\"/osx_minimum_system_version = \"${MIN_MACOS_VERSION}\"/" Cargo.toml
             sed -i -e "s/MACOSX_DEPLOYMENT_TARGET = [0-9]*.[0-9]*;/MACOSX_DEPLOYMENT_TARGET = ${MIN_MACOS_VERSION};/" flutter/macos/Runner.xcodeproj/project.pbxproj
           fi
-          ./build.py --flutter --hwcodec --unix-file-copy-paste ${{ matrix.job.extra-build-args }}
+          FLUTTER_XCODE_APP_NAME="$APP_NAME" ./build.py --flutter --hwcodec --unix-file-copy-paste ${{ matrix.job.extra-build-args }}
 
       - name: create unsigned dmg
         if: env.UPLOAD_ARTIFACT == 'true'
@@ -822,14 +850,16 @@ jobs:
           CREATE_DMG="$(command -v create-dmg)"
           CREATE_DMG="$(readlink -f "$CREATE_DMG")"
           sed -i -e 's/MAXIMUM_UNMOUNTING_ATTEMPTS=3/MAXIMUM_UNMOUNTING_ATTEMPTS=7/' "$CREATE_DMG"
-          create-dmg --icon "RustDesk.app" 200 190 --hide-extension "RustDesk.app" --window-size 800 400 --app-drop-link 600 185 rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.dmg ./flutter/build/macos/Build/Products/Release/RustDesk.app
+          codesign --force --deep -s - "./flutter/build/macos/Build/Products/Release/$APP_NAME.app"
+          create-dmg --icon "$APP_NAME.app" 200 190 --hide-extension "$APP_NAME.app" --window-size 800 400 --app-drop-link 600 185 "$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}.dmg" "./flutter/build/macos/Build/Products/Release/$APP_NAME.app"
+          codesign --force -s - "$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}.dmg"
 
       - name: Upload unsigned macOS app
         if: env.UPLOAD_ARTIFACT == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rustdesk-unsigned-macos-${{ matrix.job.arch }}
-          path: rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.dmg # can not upload the directory directly or tar.gz, which destroy the link structure, causing the codesign failed
+          name: ${{ env.APP_NAME }}-unsigned-macos-${{ matrix.job.arch }}
+          path: ${{ env.APP_NAME }}-${{ env.VERSION }}-${{ matrix.job.arch }}.dmg # can not upload the directory directly or tar.gz, which destroy the link structure, causing the codesign failed
 
       - name: Codesign app and create signed dmg
         if: env.MACOS_P12_BASE64 != null && env.UPLOAD_ARTIFACT == 'true'
@@ -843,18 +873,11 @@ jobs:
           security unlock-keychain -p ${{ secrets.MACOS_P12_PASSWORD }} rustdesk.keychain
           # start sign the rustdesk.app and dmg
           rm -rf *.dmg || true
-          codesign --force --options runtime -s ${{ secrets.MACOS_CODESIGN_IDENTITY }} --deep --strict ./flutter/build/macos/Build/Products/Release/RustDesk.app -vvv
-          create-dmg --icon "RustDesk.app" 200 190 --hide-extension "RustDesk.app" --window-size 800 400 --app-drop-link 600 185 rustdesk-${{ env.VERSION }}.dmg ./flutter/build/macos/Build/Products/Release/RustDesk.app
-          codesign --force --options runtime -s ${{ secrets.MACOS_CODESIGN_IDENTITY }} --deep --strict rustdesk-${{ env.VERSION }}.dmg -vvv
-          # notarize the rustdesk-${{ env.VERSION }}.dmg
-          rcodesign notary-submit --api-key-path ${{ github.workspace }}/rustdesk.json  --staple rustdesk-${{ env.VERSION }}.dmg
-
-      - name: Rename rustdesk
-        if: env.UPLOAD_ARTIFACT == 'true'
-        run: |
-          for name in rustdesk*??.dmg; do
-              mv "$name" "${name%%.dmg}-${{ matrix.job.arch }}.dmg"
-          done
+          codesign --force --options runtime -s ${{ secrets.MACOS_CODESIGN_IDENTITY }} --deep --strict "./flutter/build/macos/Build/Products/Release/$APP_NAME.app" -vvv
+          create-dmg --icon "$APP_NAME.app" 200 190 --hide-extension "$APP_NAME.app" --window-size 800 400 --app-drop-link 600 185 "$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}.dmg" "./flutter/build/macos/Build/Products/Release/$APP_NAME.app"
+          codesign --force --options runtime -s ${{ secrets.MACOS_CODESIGN_IDENTITY }} --deep --strict "$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}.dmg" -vvv
+          # notarize the DMG
+          rcodesign notary-submit --api-key-path ${{ github.workspace }}/rustdesk.json  --staple "$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}.dmg"
 
       - name: Publish DMG package
         if: env.UPLOAD_ARTIFACT == 'true'
@@ -862,8 +885,9 @@ jobs:
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
+          target_commitish: ${{ github.sha }}
           files: |
-            rustdesk*-${{ matrix.job.arch }}.dmg
+            ${{ env.APP_NAME }}-${{ env.VERSION }}-${{ matrix.job.arch }}.dmg
 
   publish_unsigned:
     needs:
@@ -873,40 +897,48 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ inputs.upload-artifact }}
     steps:
+      - name: Checkout source code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Load public build configuration
+        shell: bash
+        run: python3 res/build_config.py --github-env
+
       - name: Download artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: rustdesk-unsigned-macos-x86_64
+          name: ${{ env.APP_NAME }}-unsigned-macos-x86_64
           path: ./
 
       - name: Download Artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: rustdesk-unsigned-macos-aarch64
+          name: ${{ env.APP_NAME }}-unsigned-macos-aarch64
           path: ./
 
       - name: Download Artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: rustdesk-unsigned-windows-x86_64
+          name: ${{ env.APP_NAME }}-unsigned-windows-x86_64
           path: ./windows-x86_64/
 
       - name: Download Artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: rustdesk-unsigned-windows-x86
+          name: ${{ env.APP_NAME }}-unsigned-windows-x86
           path: ./windows-x86/
 
       - name: Combine unsigned app
         run: |
-          tar czf rustdesk-${{ env.VERSION }}-unsigned.tar.gz *.dmg windows-x86_64 windows-x86
+          tar czf "$APP_NAME-${{ env.VERSION }}-unsigned.tar.gz" *.dmg windows-x86_64 windows-x86
 
       - name: Publish unsigned app
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
-          files: rustdesk-${{ env.VERSION }}-unsigned.tar.gz
+          target_commitish: ${{ github.sha }}
+          files: ${{ env.APP_NAME }}-${{ env.VERSION }}-unsigned.tar.gz
 
   build-rustdesk-android:
     needs: [generate-bridge]
@@ -995,6 +1027,10 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
+
+      - name: Load public build configuration
+        shell: bash
+        run: python3 res/build_config.py --github-env
 
       - name: Install flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
@@ -1119,7 +1155,7 @@ jobs:
               # build flutter
               pushd flutter
               flutter build apk "--${{ matrix.job.reltype }}" --target-platform android-arm64 --split-per-abi
-              mv build/app/outputs/flutter-apk/app-arm64-v8a-${{ matrix.job.reltype }}.apk ../rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.apk
+              mv build/app/outputs/flutter-apk/app-arm64-v8a-${{ matrix.job.reltype }}.apk "../$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.apk"
             ;;
             armv7-linux-androideabi)
               mkdir -p ./flutter/android/app/src/main/jniLibs/armeabi-v7a
@@ -1128,7 +1164,7 @@ jobs:
               # build flutter
               pushd flutter
               flutter build apk "--${{ matrix.job.reltype }}" --target-platform android-arm --split-per-abi
-              mv build/app/outputs/flutter-apk/app-armeabi-v7a-${{ matrix.job.reltype }}.apk ../rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.apk
+              mv build/app/outputs/flutter-apk/app-armeabi-v7a-${{ matrix.job.reltype }}.apk "../$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.apk"
             ;;
             x86_64-linux-android)
               mkdir -p ./flutter/android/app/src/main/jniLibs/x86_64
@@ -1137,7 +1173,7 @@ jobs:
               # build flutter
               pushd flutter
               flutter build apk "--${{ matrix.job.reltype }}" --target-platform android-x64 --split-per-abi
-              mv build/app/outputs/flutter-apk/app-x86_64-${{ matrix.job.reltype }}.apk ../rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.apk
+              mv build/app/outputs/flutter-apk/app-x86_64-${{ matrix.job.reltype }}.apk "../$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.apk"
             ;;
             i686-linux-android)
               mkdir -p ./flutter/android/app/src/main/jniLibs/x86
@@ -1146,12 +1182,12 @@ jobs:
               # build flutter
               pushd flutter
               flutter build apk "--${{ matrix.job.reltype }}" --target-platform android-x86 --split-per-abi
-              mv build/app/outputs/flutter-apk/app-x86-${{ matrix.job.reltype }}.apk ../rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.apk
+              mv build/app/outputs/flutter-apk/app-x86-${{ matrix.job.reltype }}.apk "../$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.apk"
             ;;
           esac
           popd
           mkdir -p signed-apk; pushd signed-apk
-          mv ../rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.apk .
+          mv "../$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.apk" .
 
       # https://github.com/r0adkll/sign-android-release/issues/84#issuecomment-1889636075
       - name: Setup sign tool version variable
@@ -1175,12 +1211,20 @@ jobs:
           # env.ANDROID_SIGN_TOOL_VERSION is set by Step "Setup sign tool version variable"
           BUILD_TOOLS_VERSION: ${{ env.ANDROID_SIGN_TOOL_VERSION }}
 
+      - name: Name signed APK package
+        if: env.ANDROID_SIGNING_KEY != null
+        shell: bash
+        env:
+          SIGNED_APK: ${{ steps.sign-rustdesk.outputs.signedReleaseFile }}
+        run: |
+          mv "$SIGNED_APK" "signed-apk/$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.apk"
+
       - name: Upload Artifacts
         if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
-          path: ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
+          name: ${{ env.APP_NAME }}-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
+          path: signed-apk/${{ env.APP_NAME }}-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.apk
 
       - name: Publish signed apk package
         if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
@@ -1188,8 +1232,9 @@ jobs:
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
+          target_commitish: ${{ github.sha }}
           files: |
-            ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
+            signed-apk/${{ env.APP_NAME }}-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.apk
 
       - name: Publish unsigned apk package
         if: env.ANDROID_SIGNING_KEY == null && env.UPLOAD_ARTIFACT == 'true'
@@ -1197,8 +1242,9 @@ jobs:
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
+          target_commitish: ${{ github.sha }}
           files: |
-            signed-apk/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
+            signed-apk/${{ env.APP_NAME }}-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
 
   build-rustdesk-android-universal:
     needs: [build-rustdesk-android]
@@ -1268,6 +1314,10 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Load public build configuration
+        shell: bash
+        run: python3 res/build_config.py --github-env
+
       - name: Install flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
@@ -1335,7 +1385,7 @@ jobs:
           flutter build apk "--${{ env.reltype }}" --target-platform android-arm64,android-arm,android-x64${{ env.x86_target }}
           popd
           mkdir -p signed-apk
-          mv ./flutter/build/app/outputs/flutter-apk/app-${{ env.reltype }}.apk signed-apk/rustdesk-${{ env.VERSION }}-universal${{ env.suffix }}.apk
+          mv ./flutter/build/app/outputs/flutter-apk/app-${{ env.reltype }}.apk "signed-apk/$APP_NAME-${{ env.VERSION }}-universal${{ env.suffix }}.apk"
 
       # https://github.com/r0adkll/sign-android-release/issues/84#issuecomment-1889636075
       - name: Setup sign tool version variable
@@ -1359,12 +1409,20 @@ jobs:
           # env.ANDROID_SIGN_TOOL_VERSION is set by Step "Setup sign tool version variable"
           BUILD_TOOLS_VERSION: ${{ env.ANDROID_SIGN_TOOL_VERSION }}
 
+      - name: Name signed APK package
+        if: env.ANDROID_SIGNING_KEY != null
+        shell: bash
+        env:
+          SIGNED_APK: ${{ steps.sign-rustdesk.outputs.signedReleaseFile }}
+        run: |
+          mv "$SIGNED_APK" "signed-apk/$APP_NAME-${{ env.VERSION }}-universal${{ env.suffix }}.apk"
+
       - name: Upload Artifacts
         if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
-          path: ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
+          name: ${{ env.APP_NAME }}-${{ env.VERSION }}-universal${{ env.suffix }}.apk
+          path: signed-apk/${{ env.APP_NAME }}-${{ env.VERSION }}-universal${{ env.suffix }}.apk
 
       - name: Publish signed apk package
         if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
@@ -1372,8 +1430,9 @@ jobs:
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
+          target_commitish: ${{ github.sha }}
           files: |
-            ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
+            signed-apk/${{ env.APP_NAME }}-${{ env.VERSION }}-universal${{ env.suffix }}.apk
 
       - name: Publish unsigned apk package
         if: env.ANDROID_SIGNING_KEY == null && env.UPLOAD_ARTIFACT == 'true'
@@ -1381,8 +1440,9 @@ jobs:
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
+          target_commitish: ${{ github.sha }}
           files: |
-            signed-apk/rustdesk-${{ env.VERSION }}-universal${{ env.suffix }}.apk
+            signed-apk/${{ env.APP_NAME }}-${{ env.VERSION }}-universal${{ env.suffix }}.apk
 
   build-rustdesk-linux:
     needs: [generate-bridge]
@@ -1432,6 +1492,10 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
+
+      - name: Load public build configuration
+        shell: bash
+        run: python3 res/build_config.py --github-env
 
       - name: Set Swap Space
         if: ${{ matrix.job.arch == 'x86_64' }}
@@ -1516,6 +1580,9 @@ jobs:
             ls -l "${PWD}"
             ls -l /opt/artifacts/vcpkg/installed
           dockerRunArgs: |
+            --env APP_NAME
+            --env UPDATE_REPOSITORY
+            --env MSI_UPGRADE_CODE
             --volume "${PWD}:/workspace"
             --volume "/opt/artifacts:/opt/artifacts"
           shell: /bin/bash
@@ -1644,9 +1711,7 @@ jobs:
             export CARGO_INCREMENTAL=0
             export DEB_ARCH=${{ matrix.job.deb_arch }}
             python3 ./build.py --flutter --skip-cargo
-            for name in rustdesk*??.deb; do
-              mv "$name" "${name%%.deb}-${{ matrix.job.arch }}.deb"
-            done
+            mv "$APP_NAME-${{ env.VERSION }}.deb" "$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}.deb"
 
             # rpm package
             echo -e "start packaging fedora package"
@@ -1658,8 +1723,8 @@ jobs:
             esac
             HBB=`pwd` rpmbuild ./res/rpm-flutter.spec -bb
             pushd ~/rpmbuild/RPMS/${{ matrix.job.arch }}
-            for name in rustdesk*??.rpm; do
-                mv "$name" /workspace/"${name%%.rpm}.rpm"
+            for name in rustdesk-${{ env.VERSION }}-*.${{ matrix.job.arch }}.rpm; do
+                mv "$name" "/workspace/$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}.rpm"
             done
 
             # rpm suse package
@@ -1672,8 +1737,8 @@ jobs:
             esac
             HBB=`pwd` rpmbuild ./res/rpm-flutter-suse.spec -bb
             pushd ~/rpmbuild/RPMS/${{ matrix.job.arch }}
-            for name in rustdesk*??.rpm; do
-                mv "$name" /workspace/"${name%%.rpm}-suse.rpm"
+            for name in rustdesk-${{ env.VERSION }}-*.${{ matrix.job.arch }}.rpm; do
+                mv "$name" "/workspace/$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}-suse.rpm"
             done
 
       - name: Publish debian/rpm package
@@ -1682,16 +1747,17 @@ jobs:
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
+          target_commitish: ${{ github.sha }}
           files: |
-            rustdesk-*.deb
-            rustdesk-*.rpm
+            ${{ env.APP_NAME }}-*.deb
+            ${{ env.APP_NAME }}-*.rpm
 
       - name: Upload deb
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: env.UPLOAD_ARTIFACT == 'true'
         with:
-          name: rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.deb
-          path: rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.deb
+          name: ${{ env.APP_NAME }}-${{ env.VERSION }}-${{ matrix.job.arch }}.deb
+          path: ${{ env.APP_NAME }}-${{ env.VERSION }}-${{ matrix.job.arch }}.deb
 
       # only x86_64 for arch since we can not find newest arm64 docker image to build
       # old arch image does not make sense for arch since it is "arch" which always update to date
@@ -1712,14 +1778,22 @@ jobs:
           scripts: |
             cd res && HBB=`pwd`/.. FLUTTER=1 makepkg -f
 
+      - name: Name archlinux package
+        if: matrix.job.arch == 'x86_64' && env.UPLOAD_ARTIFACT == 'true'
+        run: |
+          for name in res/rustdesk-${{ env.VERSION }}-*.pkg.tar.zst; do
+            sudo mv "$name" "res/$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}.pkg.tar.zst"
+          done
+
       - name: Publish archlinux package
         if: matrix.job.arch == 'x86_64' && env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
+          target_commitish: ${{ github.sha }}
           files: |
-            res/rustdesk-${{ env.VERSION }}*.zst
+            res/${{ env.APP_NAME }}-${{ env.VERSION }}-${{ matrix.job.arch }}.pkg.tar.zst
 
   build-rustdesk-linux-sciter:
     if: ${{ inputs.upload-artifact }}
@@ -1763,6 +1837,10 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Load public build configuration
+        shell: bash
+        run: python3 res/build_config.py --github-env
+
       - name: Modify vcpkg.json for armv7
         if: matrix.job.vcpkg-triplet == 'arm-linux'
         run: |
@@ -1798,6 +1876,9 @@ jobs:
           setup: |
             ls -l "${PWD}"
           dockerRunArgs: |
+            --env APP_NAME
+            --env UPDATE_REPOSITORY
+            --env MSI_UPGRADE_CODE
             --volume "${PWD}:/workspace"
           shell: /bin/bash
           install: |
@@ -1927,10 +2008,8 @@ jobs:
       - name: Rename rustdesk
         shell: bash
         run: |
-          for name in rustdesk*??.deb; do
-              # use cp to duplicate deb files to fit other packages.
-              cp "$name" "${name%%.deb}-${{ matrix.job.arch }}-sciter.deb"
-          done
+          # use cp to duplicate deb files to fit other packages.
+          cp "$APP_NAME-${{ env.VERSION }}.deb" "$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.deb"
 
       - name: Publish debian package
         if: env.UPLOAD_ARTIFACT == 'true'
@@ -1938,15 +2017,16 @@ jobs:
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
+          target_commitish: ${{ github.sha }}
           files: |
-            rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.deb
+            ${{ env.APP_NAME }}-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.deb
 
       - name: Upload deb
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: env.UPLOAD_ARTIFACT == 'true'
         with:
-          name: rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.deb
-          path: rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.deb
+          name: ${{ env.APP_NAME }}-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.deb
+          path: ${{ env.APP_NAME }}-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.deb
 
   build-appimage:
     name: Build appimage ${{ matrix.job.target }}
@@ -1965,15 +2045,19 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Load public build configuration
+        shell: bash
+        run: python3 res/build_config.py --github-env
+
       - name: Download Binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.deb
+          name: ${{ env.APP_NAME }}-${{ env.VERSION }}-${{ matrix.job.arch }}.deb
           path: .
 
       - name: Rename Binary
         run: |
-          mv rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.deb appimage/rustdesk.deb
+          mv "$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}.deb" appimage/rustdesk.deb
 
       - name: Build appimage package
         shell: bash
@@ -1989,6 +2073,11 @@ jobs:
           # run appimage-builder
           pushd appimage
           sudo appimage-builder --skip-tests --recipe ./AppImageBuilder-${{ matrix.job.arch }}.yml
+          for name in *.AppImage; do
+            if [[ "$name" != "$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}.AppImage" ]]; then
+              sudo mv "$name" "$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}.AppImage"
+            fi
+          done
 
       - name: Publish appimage package
         if: env.UPLOAD_ARTIFACT == 'true'
@@ -1996,8 +2085,9 @@ jobs:
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
+          target_commitish: ${{ github.sha }}
           files: |
-            ./appimage/rustdesk-${{ env.VERSION }}-*.AppImage
+            ./appimage/${{ env.APP_NAME }}-${{ env.VERSION }}-${{ matrix.job.arch }}.AppImage
 
   build-flatpak:
     name: Build flatpak ${{ matrix.job.target }}${{ matrix.job.suffix }}
@@ -2039,15 +2129,19 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Load public build configuration
+        shell: bash
+        run: python3 res/build_config.py --github-env
+
       - name: Download Binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.deb
+          name: ${{ env.APP_NAME }}-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.deb
           path: .
 
       - name: Rename Binary
         run: |
-          mv rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.deb flatpak/rustdesk.deb
+          mv "$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.deb" flatpak/rustdesk.deb
 
       - uses: rustdesk-org/run-on-arch-action@d3fcfbb632b84cf7f6bc772bfaaa2c2f4f8789a8 # no release tag; commit 2026-05-26
         name: Build rustdesk flatpak package for ${{ matrix.job.arch }}
@@ -2059,6 +2153,7 @@ jobs:
           setup: |
             ls -l "${PWD}"
           dockerRunArgs: |
+            --env APP_NAME
             --volume "${PWD}:/workspace"
           shell: /bin/bash
           install: |
@@ -2074,15 +2169,16 @@ jobs:
             pushd flatpak
             git clone https://github.com/flathub/shared-modules.git --depth=1
             flatpak-builder --user --install-deps-from=flathub -y --force-clean --repo=repo ./build ./rustdesk.json
-            flatpak build-bundle ./repo rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.flatpak com.rustdesk.RustDesk
+            flatpak build-bundle ./repo "$APP_NAME-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.flatpak" com.rustdesk.RustDesk
 
       - name: Publish flatpak package
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
+          target_commitish: ${{ github.sha }}
           files: |
-            flatpak/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.flatpak
+            flatpak/${{ env.APP_NAME }}-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.flatpak
 
   build-rustdesk-web:
     if: False
@@ -2099,6 +2195,10 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
+
+      - name: Load public build configuration
+        shell: bash
+        run: python3 res/build_config.py --github-env
 
       - name: Prepare env
         run: |
@@ -2138,12 +2238,12 @@ jobs:
           popd
 
           pushd flutter
-          flutter build web --release
+          flutter build web --release --dart-define="APP_NAME=$APP_NAME"
           cd build
           cp ../web/README.md web
           # TODO: Remove the following line when the web is almost complete.
           echo -e "\n\nThis build is for preview and not full functionality." >> web/README.md
-          dir_name="rustdesk-${{ env.VERSION }}-${{ env.RELEASE_NAME }}"
+          dir_name="$APP_NAME-${{ env.VERSION }}-${{ env.RELEASE_NAME }}"
           mv web "${dir_name}" && tar czf "${dir_name}".tar.gz "${dir_name}"
           sha256sum "${dir_name}".tar.gz
           popd
@@ -2154,5 +2254,6 @@ jobs:
         with:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
+          target_commitish: ${{ github.sha }}
           files: |
-            flutter/build/rustdesk-${{ env.VERSION }}-${{ env.RELEASE_NAME }}.tar.gz
+            flutter/build/${{ env.APP_NAME }}-${{ env.VERSION }}-${{ env.RELEASE_NAME }}.tar.gz

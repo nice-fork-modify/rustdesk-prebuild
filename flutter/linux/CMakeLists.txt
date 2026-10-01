@@ -169,6 +169,23 @@ install(CODE "
 set(INSTALL_BUNDLE_DATA_DIR "${CMAKE_INSTALL_PREFIX}/data")
 set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}/lib")
 
+set(APP_NAME "$ENV{APP_NAME}")
+if(APP_NAME STREQUAL "")
+  set(APP_NAME "RustDesk")
+endif()
+string(REPLACE "\\" "\\\\" APP_NAME "${APP_NAME}")
+string(REPLACE " " "\\s" APP_NAME "${APP_NAME}")
+string(REPLACE "\n" "\\n" APP_NAME "${APP_NAME}")
+string(REPLACE "\r" "\\r" APP_NAME "${APP_NAME}")
+string(REPLACE "\t" "\\t" APP_NAME "${APP_NAME}")
+foreach(DESKTOP_FILE rustdesk.desktop rustdesk-link.desktop)
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../res/${DESKTOP_FILE}" DESKTOP_CONTENT)
+  string(REPLACE "Name=RustDesk\n" "Name=${APP_NAME}\n" DESKTOP_CONTENT "${DESKTOP_CONTENT}")
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/${DESKTOP_FILE}" "${DESKTOP_CONTENT}")
+  install(FILES "${CMAKE_CURRENT_BINARY_DIR}/${DESKTOP_FILE}"
+    DESTINATION "${INSTALL_BUNDLE_DATA_DIR}" COMPONENT Runtime)
+endforeach()
+
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
 

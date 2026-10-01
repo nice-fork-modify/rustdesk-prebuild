@@ -812,7 +812,10 @@ class RustdeskImpl {
   }
 
   String mainGetAppNameSync({dynamic hint}) {
-    return js.context.callMethod('getByName', ['app-name']);
+    const appName = String.fromEnvironment('APP_NAME');
+    return appName.isNotEmpty
+        ? appName
+        : js.context.callMethod('getByName', ['app-name']);
   }
 
   String mainUriPrefixSync({dynamic hint}) {
