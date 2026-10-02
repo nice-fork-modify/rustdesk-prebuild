@@ -22,5 +22,7 @@ jobs:
     uses: ./.github/workflows/flutter-build.yml
     secrets:
       APP_NAME: ${{ secrets.APP_NAME }}
+      RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
+      RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
     with:
       upload-artifact: false

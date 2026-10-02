@@ -70,10 +70,26 @@ void showServerSettingsWithValue(
     OverlayDialogManager dialogManager,
     void Function(VoidCallback)? upSetState) async {
   var isInProgress = false;
-  final idCtrl = TextEditingController(text: serverConfig.idServer);
-  final relayCtrl = TextEditingController(text: serverConfig.relayServer);
-  final apiCtrl = TextEditingController(text: serverConfig.apiServer);
-  final keyCtrl = TextEditingController(text: serverConfig.key);
+  final idServerFixed = isOptionFixed('custom-rendezvous-server');
+  final relayServerFixed = isOptionFixed('relay-server');
+  final apiServerFixed = isOptionFixed('api-server');
+  final keyFixed = isOptionFixed('key');
+  final idServer = idServerFixed
+      ? await bind.mainGetOption(key: 'custom-rendezvous-server')
+      : serverConfig.idServer;
+  final relayServer = relayServerFixed
+      ? await bind.mainGetOption(key: 'relay-server')
+      : serverConfig.relayServer;
+  final apiServer = apiServerFixed
+      ? await bind.mainGetOption(key: 'api-server')
+      : serverConfig.apiServer;
+  final key = keyFixed
+      ? await bind.mainGetOption(key: 'key')
+      : serverConfig.key;
+  final idCtrl = TextEditingController(text: idServer);
+  final relayCtrl = TextEditingController(text: relayServer);
+  final apiCtrl = TextEditingController(text: apiServer);
+  final keyCtrl = TextEditingController(text: key);
 
   RxString idServerMsg = ''.obs;
   RxString relayServerMsg = ''.obs;
@@ -107,7 +123,9 @@ void showServerSettingsWithValue(
 
     Widget buildField(
         String label, TextEditingController controller, String errorMsg,
-        {String? Function(String?)? validator, bool autofocus = false}) {
+        {String? Function(String?)? validator,
+        bool autofocus = false,
+        bool enabled = true}) {
       if (isDesktop || isWeb) {
         return Row(
           children: [
@@ -126,6 +144,7 @@ void showServerSettingsWithValue(
                 showLabelText: false,
                 validator: validator,
                 autofocus: autofocus,
+                enabled: enabled,
               ).workaroundFreezeLinuxMint(),
             ),
           ],
@@ -137,6 +156,7 @@ void showServerSettingsWithValue(
         controller: controller,
         errorMsg: errorMsg,
         validator: validator,
+        enabled: enabled,
       ).workaroundFreezeLinuxMint();
     }
 
@@ -144,7 +164,11 @@ void showServerSettingsWithValue(
       title: Row(
         children: [
           Expanded(child: Text(translate('ID/Relay Server'))),
-          ...ServerConfigImportExportWidgets(controllers, errMsgs),
+          ...ServerConfigImportExportWidgets(controllers, errMsgs,
+              importEnabled: !(idServerFixed &&
+                  relayServerFixed &&
+                  apiServerFixed &&
+                  keyFixed)),
         ],
       ),
       content: ConstrainedBox(
@@ -154,17 +178,19 @@ void showServerSettingsWithValue(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   buildField(translate('ID Server'), idCtrl, idServerMsg.value,
-                      autofocus: true),
+                      autofocus: !idServerFixed, enabled: !idServerFixed),
                   SizedBox(height: 8),
                   if (!isIOS && !isWeb) ...[
                     buildField(translate('Relay Server'), relayCtrl,
-                        relayServerMsg.value),
+                        relayServerMsg.value,
+                        enabled: !relayServerFixed),
                     SizedBox(height: 8),
                   ],
                   buildField(
                     translate('API Server'),
                     apiCtrl,
                     apiServerMsg.value,
+                    enabled: !apiServerFixed,
                     validator: (v) {
                       if (v != null && v.isNotEmpty) {
                         if (!(v.startsWith('http://') ||
@@ -176,7 +202,7 @@ void showServerSettingsWithValue(
                     },
                   ),
                   SizedBox(height: 8),
-                  buildField('Key', keyCtrl, ''),
+                  buildField('Key', keyCtrl, '', enabled: !keyFixed),
                   if (isInProgress)
                     Padding(
                       padding: EdgeInsets.only(top: 8),
@@ -213,11 +239,13 @@ TextFormField serverSettingsTextFormField({
   required String errorMsg,
   String? Function(String?)? validator,
   bool autofocus = false,
+  bool enabled = true,
   bool showLabelText = true,
   EdgeInsetsGeometry? contentPadding,
 }) {
   return TextFormField(
     controller: controller,
+    enabled: enabled,
     decoration: InputDecoration(
       labelText: showLabelText ? label : null,
       errorText: errorMsg.isEmpty ? null : errorMsg,

@@ -180,8 +180,9 @@ customImageQualitySetting() {
 
 List<Widget> ServerConfigImportExportWidgets(
   List<TextEditingController> controllers,
-  List<RxString> errMsgs,
-) {
+  List<RxString> errMsgs, {
+  bool importEnabled = true,
+}) {
   import() {
     Clipboard.getData(Clipboard.kTextPlain).then((value) {
       importConfig(controllers, errMsgs, value?.text);
@@ -204,7 +205,9 @@ List<Widget> ServerConfigImportExportWidgets(
     Tooltip(
       message: translate('Import server config'),
       child: IconButton(
-          icon: Icon(Icons.paste, color: Colors.grey), onPressed: import),
+          icon: Icon(Icons.paste),
+          color: Colors.grey,
+          onPressed: importEnabled ? import : null),
     ),
     Tooltip(
         message: translate('Export Server Config'),

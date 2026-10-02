@@ -754,8 +754,25 @@ class RustdeskImpl {
     return Future.value(mainGetOptionSync(key: key));
   }
 
+  String? _buildServerOption(String key) {
+    const server = String.fromEnvironment('RENDEZVOUS_SERVER');
+    const publicKey = String.fromEnvironment('RS_PUB_KEY');
+    switch (key) {
+      case 'custom-rendezvous-server':
+        return server.isNotEmpty ? server : null;
+      case 'relay-server':
+      case 'api-server':
+        return server.isNotEmpty ? '' : null;
+      case 'key':
+        return publicKey.isNotEmpty ? publicKey : null;
+      default:
+        return null;
+    }
+  }
+
   String mainGetOptionSync({required String key, dynamic hint}) {
-    return js.context.callMethod('getByName', ['option', key]);
+    return _buildServerOption(key) ??
+        js.context.callMethod('getByName', ['option', key]);
   }
 
   Future<String> mainGetError({dynamic hint}) {
@@ -768,6 +785,9 @@ class RustdeskImpl {
 
   Future<void> mainSetOption(
       {required String key, required String value, dynamic hint}) {
+    if (mainIsOptionFixed(key: key)) {
+      return Future.value();
+    }
     js.context.callMethod('setByName', [
       'option',
       jsonEncode({'name': key, 'value': value})
@@ -782,11 +802,37 @@ class RustdeskImpl {
 
   // get server settings
   String mainGetOptionsSync({dynamic hint}) {
-    return js.context.callMethod('getByName', ['options']);
+    final saved = js.context.callMethod('getByName', ['options']) as String;
+    if (_buildServerOption('custom-rendezvous-server') == null &&
+        _buildServerOption('key') == null) {
+      return saved;
+    }
+    final options = jsonDecode(saved) as Map<String, dynamic>;
+    for (final key in [
+      'custom-rendezvous-server',
+      'relay-server',
+      'api-server',
+      'key'
+    ]) {
+      final value = _buildServerOption(key);
+      if (value != null) {
+        options[key] = value;
+      }
+    }
+    return jsonEncode(options);
   }
 
   Future<void> mainSetOptions({required String json, dynamic hint}) {
-    return Future(() => js.context.callMethod('setByName', ['options', json]));
+    return Future(() {
+      if (_buildServerOption('custom-rendezvous-server') == null &&
+          _buildServerOption('key') == null) {
+        js.context.callMethod('setByName', ['options', json]);
+        return;
+      }
+      final options = jsonDecode(json) as Map<String, dynamic>;
+      options.removeWhere((key, value) => mainIsOptionFixed(key: key));
+      js.context.callMethod('setByName', ['options', jsonEncode(options)]);
+    });
   }
 
   Future<String> mainTestIfValidServer(
@@ -868,6 +914,9 @@ class RustdeskImpl {
   }
 
   Future<bool> mainIsUsingPublicServer({dynamic hint}) {
+    if (mainIsOptionFixed(key: 'custom-rendezvous-server')) {
+      return Future.value(false);
+    }
     return Future(() =>
         js.context.callMethod('getByName', ["is_using_public_server"]) ==
         'true');
@@ -878,6 +927,14 @@ class RustdeskImpl {
   }
 
   Future<String> mainGetApiServer({dynamic hint}) {
+    if (mainIsOptionFixed(key: 'custom-rendezvous-server')) {
+      final idServer = mainGetOptionSync(key: 'custom-rendezvous-server');
+      final server = Uri.parse('http://$idServer');
+      final port = RegExp(r':([0-9]+)$').firstMatch(idServer);
+      return Future.value(server
+          .replace(port: port == null ? 21114 : int.parse(port[1]!) - 2)
+          .toString());
+    }
     return Future(() => js.context.callMethod('getByName', ['api_server']));
   }
 
@@ -1773,7 +1830,7 @@ class RustdeskImpl {
   }
 
   bool mainIsOptionFixed({required String key, dynamic hint}) {
-    return false;
+    return _buildServerOption(key) != null;
   }
 
   bool mainGetUseTextureRender({dynamic hint}) {

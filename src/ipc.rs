@@ -1705,6 +1705,12 @@ pub fn get_id() -> String {
 }
 
 pub async fn get_rendezvous_server(ms_timeout: u64) -> (String, Vec<String>) {
+    if config::get_build_server_option("custom-rendezvous-server").is_some() {
+        return (
+            Config::get_rendezvous_server(),
+            Config::get_rendezvous_servers(),
+        );
+    }
     if let Ok(Some(v)) = get_config_async("rendezvous_server", ms_timeout).await {
         let mut urls = v.split(",");
         let a = urls.next().unwrap_or_default().to_owned();
@@ -1721,7 +1727,8 @@ pub async fn get_rendezvous_server(ms_timeout: u64) -> (String, Vec<String>) {
 async fn get_options_(ms_timeout: u64) -> ResultType<HashMap<String, String>> {
     let mut c = connect(ms_timeout, "").await?;
     c.send(&Data::Options(None)).await?;
-    if let Some(Data::Options(Some(value))) = c.next_timeout(ms_timeout).await? {
+    if let Some(Data::Options(Some(mut value))) = c.next_timeout(ms_timeout).await? {
+        config::apply_build_server_options(&mut value);
         Config::set_options(value.clone());
         Ok(value)
     } else {
@@ -1747,6 +1754,9 @@ pub async fn get_option_async(key: &str) -> String {
 }
 
 pub fn set_option(key: &str, value: &str) {
+    if config::get_build_server_option(key).is_some() {
+        return;
+    }
     let mut options = get_options();
     if value.is_empty() {
         options.remove(key);
@@ -1757,7 +1767,8 @@ pub fn set_option(key: &str, value: &str) {
 }
 
 #[tokio::main(flavor = "current_thread")]
-pub async fn set_options(value: HashMap<String, String>) -> ResultType<()> {
+pub async fn set_options(mut value: HashMap<String, String>) -> ResultType<()> {
+    config::apply_build_server_options(&mut value);
     let _nat = CheckTestNatType::new();
     if let Ok(mut c) = connect(1000, "").await {
         c.send(&Data::Options(Some(value.clone()))).await?;
@@ -1787,6 +1798,9 @@ pub async fn get_nat_type(ms_timeout: u64) -> i32 {
 }
 
 pub async fn get_rendezvous_servers(ms_timeout: u64) -> Vec<String> {
+    if config::get_build_server_option("custom-rendezvous-server").is_some() {
+        return Config::get_rendezvous_servers();
+    }
     if let Ok(Some(v)) = get_config_async("rendezvous_servers", ms_timeout).await {
         return v.split(',').map(|x| x.to_owned()).collect();
     }

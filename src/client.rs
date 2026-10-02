@@ -291,7 +291,10 @@ impl Client {
         } else {
             (peer, "", key, token)
         };
-        let (rendezvous_server, servers, contained) = if other_server.is_empty() {
+        let key = config::get_build_server_option("key").unwrap_or(key);
+        let (rendezvous_server, servers, contained) = if other_server.is_empty()
+            || config::get_build_server_option("custom-rendezvous-server").is_some()
+        {
             crate::get_rendezvous_server(1_000).await
         } else {
             if other_server == PUBLIC_SERVER {
@@ -1822,6 +1825,11 @@ impl LoginConfigHandler {
             if real_id != raw_id {
                 force_relay = true;
             }
+            let server =
+                config::get_build_server_option("custom-rendezvous-server").unwrap_or(server);
+            let key = config::get_build_server_option("key")
+                .map(str::to_owned)
+                .unwrap_or(key);
             self.other_server = Some((real_id.clone(), server.to_owned(), key));
             id = format!("{real_id}@{server}");
         } else {
@@ -1864,7 +1872,10 @@ impl LoginConfigHandler {
                 || Config::is_proxy();
         if let Some((real_id, server, key)) = &self.other_server {
             let other_server_key = self.get_option("other-server-key");
-            if !other_server_key.is_empty() && key.is_empty() {
+            if config::get_build_server_option("key").is_none()
+                && !other_server_key.is_empty()
+                && key.is_empty()
+            {
                 self.other_server = Some((real_id.to_owned(), server.to_owned(), other_server_key));
             }
         }
@@ -2572,7 +2583,7 @@ impl LoginConfigHandler {
             }
         }
         if let Some((_, b, c)) = self.other_server.as_ref() {
-            if b != PUBLIC_SERVER {
+            if b != PUBLIC_SERVER && config::get_build_server_option("key").is_none() {
                 config
                     .options
                     .insert("other-server-key".to_owned(), c.clone());

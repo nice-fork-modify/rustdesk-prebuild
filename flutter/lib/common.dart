@@ -3563,7 +3563,7 @@ importConfig(List<TextEditingController>? controllers, List<RxString>? errMsgs,
       if (isWeb || isIOS) {
         sc.relayServer = '';
       }
-      if (sc.idServer.isNotEmpty) {
+      if (sc.idServer.isNotEmpty || isOptionFixed('custom-rendezvous-server')) {
         Future<bool> success = setServerConfig(controllers, errMsgs, sc);
         success.then((value) {
           if (value) {
@@ -3596,10 +3596,22 @@ Future<bool> setServerConfig(
     return input;
   }
 
-  config.idServer = removeEndSlash(config.idServer.trim());
-  config.relayServer = removeEndSlash(config.relayServer.trim());
-  config.apiServer = removeEndSlash(config.apiServer.trim());
-  config.key = config.key.trim();
+  final idServerFixed = isOptionFixed('custom-rendezvous-server');
+  final relayServerFixed = isOptionFixed('relay-server');
+  final apiServerFixed = isOptionFixed('api-server');
+  final keyFixed = isOptionFixed('key');
+  config.idServer = idServerFixed
+      ? await bind.mainGetOption(key: 'custom-rendezvous-server')
+      : removeEndSlash(config.idServer.trim());
+  config.relayServer = relayServerFixed
+      ? await bind.mainGetOption(key: 'relay-server')
+      : removeEndSlash(config.relayServer.trim());
+  config.apiServer = apiServerFixed
+      ? await bind.mainGetOption(key: 'api-server')
+      : removeEndSlash(config.apiServer.trim());
+  config.key = keyFixed
+      ? await bind.mainGetOption(key: 'key')
+      : config.key.trim();
   if (controllers != null) {
     controllers[0].text = config.idServer;
     controllers[1].text = config.relayServer;
@@ -3634,11 +3646,19 @@ Future<bool> setServerConfig(
   final oldApiServer = await bind.mainGetApiServer();
 
   // should set one by one
-  await bind.mainSetOption(
-      key: 'custom-rendezvous-server', value: config.idServer);
-  await bind.mainSetOption(key: 'relay-server', value: config.relayServer);
-  await bind.mainSetOption(key: 'api-server', value: config.apiServer);
-  await bind.mainSetOption(key: 'key', value: config.key);
+  if (!idServerFixed) {
+    await bind.mainSetOption(
+        key: 'custom-rendezvous-server', value: config.idServer);
+  }
+  if (!relayServerFixed) {
+    await bind.mainSetOption(key: 'relay-server', value: config.relayServer);
+  }
+  if (!apiServerFixed) {
+    await bind.mainSetOption(key: 'api-server', value: config.apiServer);
+  }
+  if (!keyFixed) {
+    await bind.mainSetOption(key: 'key', value: config.key);
+  }
   final newApiServer = await bind.mainGetApiServer();
   if (oldApiServer.isNotEmpty &&
       oldApiServer != newApiServer &&

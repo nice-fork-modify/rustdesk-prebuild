@@ -79,7 +79,11 @@ lazy_static::lazy_static! {
     static ref USER_DEFAULT_CONFIG: RwLock<(UserDefaultConfig, Instant)> = RwLock::new((UserDefaultConfig::load(), Instant::now()));
     pub static ref NEW_STORED_PEER_CONFIG: Mutex<HashSet<String>> = Default::default();
     pub static ref DEFAULT_SETTINGS: RwLock<HashMap<String, String>> = Default::default();
-    pub static ref OVERWRITE_SETTINGS: RwLock<HashMap<String, String>> = Default::default();
+    pub static ref OVERWRITE_SETTINGS: RwLock<HashMap<String, String>> = RwLock::new({
+        let mut options = HashMap::new();
+        apply_build_server_options(&mut options);
+        options
+    });
     pub static ref DEFAULT_DISPLAY_SETTINGS: RwLock<HashMap<String, String>> = Default::default();
     pub static ref OVERWRITE_DISPLAY_SETTINGS: RwLock<HashMap<String, String>> = Default::default();
     pub static ref DEFAULT_LOCAL_SETTINGS: RwLock<HashMap<String, String>> = Default::default();
@@ -124,6 +128,55 @@ const CHARS: &[char] = &[
 
 pub const RENDEZVOUS_SERVERS: &[&str] = &["rs-ny.rustdesk.com"];
 pub const RS_PUB_KEY: &str = "OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=";
+
+pub fn get_build_server_option(key: &str) -> Option<&'static str> {
+    match key {
+        "custom-rendezvous-server" => option_env!("RENDEZVOUS_SERVER"),
+        "relay-server" | "api-server" => {
+            return get_build_server_option("custom-rendezvous-server").map(|_| "");
+        }
+        "key" => option_env!("RS_PUB_KEY"),
+        _ => None,
+    }
+    .filter(|value| !value.is_empty())
+}
+
+pub fn apply_build_server_options(options: &mut HashMap<String, String>) {
+    for key in [
+        "custom-rendezvous-server",
+        "relay-server",
+        "api-server",
+        "key",
+    ] {
+        if let Some(value) = get_build_server_option(key) {
+            options.insert(key.to_owned(), value.to_owned());
+        }
+    }
+}
+
+fn is_build_server_option(key: &str) -> bool {
+    get_build_server_option(key).is_some()
+        || (key == "rendezvous-servers"
+            && get_build_server_option("custom-rendezvous-server").is_some())
+}
+
+fn skip_build_rendezvous_server(_: &String) -> bool {
+    get_build_server_option("custom-rendezvous-server").is_some()
+}
+
+fn serialize_config2_options<S>(
+    options: &HashMap<String, String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: de::Serializer,
+{
+    let options: HashMap<_, _> = options
+        .iter()
+        .filter(|(key, _)| !is_build_server_option(key))
+        .collect();
+    de::Serialize::serialize(&options, serializer)
+}
 
 pub const RENDEZVOUS_PORT: i32 = 21116;
 pub const RELAY_PORT: i32 = 21117;
@@ -246,7 +299,11 @@ pub struct Socks5Server {
 // more variable configs
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Config2 {
-    #[serde(default, deserialize_with = "deserialize_string")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_string",
+        skip_serializing_if = "skip_build_rendezvous_server"
+    )]
     rendezvous_server: String,
     #[serde(default, deserialize_with = "deserialize_i32")]
     nat_type: i32,
@@ -261,7 +318,11 @@ pub struct Config2 {
     socks: Option<Socks5Server>,
 
     // the other scalar value must before this
-    #[serde(default, deserialize_with = "deserialize_hashmap_string_string")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_hashmap_string_string",
+        serialize_with = "serialize_config2_options"
+    )]
     pub options: HashMap<String, String>,
 }
 
@@ -495,9 +556,20 @@ fn patch(path: PathBuf) -> PathBuf {
 }
 
 impl Config2 {
+    fn purify_build_server_options(&mut self) -> bool {
+        let len = self.options.len();
+        self.options.retain(|key, _| !is_build_server_option(key));
+        let clear_server = skip_build_rendezvous_server(&self.rendezvous_server)
+            && !self.rendezvous_server.is_empty();
+        if clear_server {
+            self.rendezvous_server.clear();
+        }
+        len != self.options.len() || clear_server
+    }
+
     fn load() -> Config2 {
         let mut config = Config::load_::<Config2>("2");
-        let mut store = false;
+        let mut store = config.purify_build_server_options();
         if let Some(mut socks) = config.socks {
             let (password, _, store2) =
                 decrypt_str_or_original(&socks.password, PASSWORD_ENC_VERSION);
@@ -521,6 +593,7 @@ impl Config2 {
 
     fn store(&self) {
         let mut config = self.clone();
+        config.purify_build_server_options();
         let stored = Config::load_::<Config2>("2");
         if let Some(mut socks) = config.socks {
             let stored_password = stored
@@ -541,7 +614,8 @@ impl Config2 {
         return CONFIG2.read().unwrap().clone();
     }
 
-    pub fn set(cfg: Config2) -> bool {
+    pub fn set(mut cfg: Config2) -> bool {
+        cfg.purify_build_server_options();
         let mut lock = CONFIG2.write().unwrap();
         if *lock == cfg {
             return false;
@@ -916,7 +990,9 @@ impl Config {
     }
 
     pub fn get_rendezvous_server() -> String {
-        let mut rendezvous_server = EXE_RENDEZVOUS_SERVER.read().unwrap().clone();
+        let mut rendezvous_server = get_build_server_option("custom-rendezvous-server")
+            .map(str::to_owned)
+            .unwrap_or_else(|| EXE_RENDEZVOUS_SERVER.read().unwrap().clone());
         if rendezvous_server.is_empty() {
             rendezvous_server = Self::get_option("custom-rendezvous-server");
         }
@@ -939,6 +1015,9 @@ impl Config {
     }
 
     pub fn get_rendezvous_servers() -> Vec<String> {
+        if let Some(server) = get_build_server_option("custom-rendezvous-server") {
+            return vec![server.to_owned()];
+        }
         let s = EXE_RENDEZVOUS_SERVER.read().unwrap().clone();
         if !s.is_empty() {
             return vec![s];
@@ -971,6 +1050,9 @@ impl Config {
 
     pub fn update_latency(host: &str, latency: i64) {
         ONLINE.lock().unwrap().insert(host.to_owned(), latency);
+        if get_build_server_option("custom-rendezvous-server").is_some() {
+            return;
+        }
         let mut host = "".to_owned();
         let mut delay = i64::MAX;
         for (tmp_host, tmp_delay) in ONLINE.lock().unwrap().iter() {
@@ -1229,12 +1311,16 @@ impl Config {
         let mut res = DEFAULT_SETTINGS.read().unwrap().clone();
         res.extend(CONFIG2.read().unwrap().options.clone());
         res.extend(OVERWRITE_SETTINGS.read().unwrap().clone());
+        apply_build_server_options(&mut res);
         res
     }
 
     #[inline]
     fn purify_options(v: &mut HashMap<String, String>) {
-        v.retain(|k, v| is_option_can_save(&OVERWRITE_SETTINGS, k, &DEFAULT_SETTINGS, v));
+        v.retain(|k, v| {
+            !is_build_server_option(k)
+                && is_option_can_save(&OVERWRITE_SETTINGS, k, &DEFAULT_SETTINGS, v)
+        });
     }
 
     pub fn set_options(mut v: HashMap<String, String>) {
@@ -1248,6 +1334,9 @@ impl Config {
     }
 
     pub fn get_option(k: &str) -> String {
+        if let Some(value) = get_build_server_option(k) {
+            return value.to_owned();
+        }
         get_or(
             &OVERWRITE_SETTINGS,
             &CONFIG2.read().unwrap().options,
@@ -1262,7 +1351,9 @@ impl Config {
     }
 
     pub fn set_option(k: String, v: String) {
-        if !is_option_can_save(&OVERWRITE_SETTINGS, &k, &DEFAULT_SETTINGS, &v) {
+        if is_build_server_option(&k)
+            || !is_option_can_save(&OVERWRITE_SETTINGS, &k, &DEFAULT_SETTINGS, &v)
+        {
             let mut config = CONFIG2.write().unwrap();
             if config.options.remove(&k).is_some() {
                 config.store();
@@ -3745,6 +3836,204 @@ mod tests {
         );
         assert!(cfg.password.is_empty());
         assert_eq!(cfg.salt, "new-salt");
+    }
+
+    #[test]
+    fn test_build_server_automatic_options() {
+        let fixed = option_env!("RENDEZVOUS_SERVER")
+            .filter(|value| !value.is_empty())
+            .is_some();
+        let mut options = HashMap::from([
+            (
+                "relay-server".to_owned(),
+                "local-relay.example.test".to_owned(),
+            ),
+            (
+                "api-server".to_owned(),
+                "https://api.example.test".to_owned(),
+            ),
+        ]);
+        let original = options.clone();
+        apply_build_server_options(&mut options);
+        for key in ["relay-server", "api-server"] {
+            assert_eq!(get_build_server_option(key), fixed.then_some(""));
+            assert_eq!(options[key], if fixed { "" } else { &original[key] });
+            assert_eq!(is_build_server_option(key), fixed);
+        }
+        assert_eq!(get_build_server_option("unrelated-option"), None);
+    }
+
+    #[test]
+    fn test_build_server_config_serialization() {
+        let mut config = Config2::default();
+        config.rendezvous_server = "stored.example.test".to_owned();
+        for key in [
+            "custom-rendezvous-server",
+            "rendezvous-servers",
+            "key",
+            "relay-server",
+            "api-server",
+        ] {
+            config
+                .options
+                .insert(key.to_owned(), "stored-value".to_owned());
+        }
+        let value: toml::Value = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(
+            value.get("rendezvous_server").is_none(),
+            get_build_server_option("custom-rendezvous-server").is_some()
+        );
+        let options = value.get("options").unwrap();
+        for key in [
+            "custom-rendezvous-server",
+            "rendezvous-servers",
+            "key",
+            "relay-server",
+            "api-server",
+        ] {
+            assert_eq!(options.get(key).is_none(), is_build_server_option(key));
+        }
+    }
+
+    #[test]
+    fn test_build_server_config_load() {
+        let _lock = CONFIG_STATE_TEST_LOCK.lock().unwrap();
+        let path = Config2::file();
+        let _file = ConfigFileRestoreGuard::new(path.clone());
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"rendezvous_server = "stored.example.test"
+[options]
+custom-rendezvous-server = "stored.example.test"
+rendezvous-servers = "stored.example.test"
+key = "stored-key"
+relay-server = "relay.example.test"
+api-server = "https://api.example.test"
+"#,
+        )
+        .unwrap();
+        let mut config = Config::load_::<Config2>("2");
+        assert_eq!(
+            config.purify_build_server_options(),
+            get_build_server_option("custom-rendezvous-server").is_some()
+                || get_build_server_option("key").is_some()
+        );
+        let config = Config2::load();
+        assert_eq!(
+            config.rendezvous_server.is_empty(),
+            skip_build_rendezvous_server(&String::new())
+        );
+        let stored: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            stored.get("rendezvous_server").is_none(),
+            get_build_server_option("custom-rendezvous-server").is_some()
+        );
+        for key in [
+            "custom-rendezvous-server",
+            "rendezvous-servers",
+            "relay-server",
+            "api-server",
+            "key",
+        ] {
+            assert_eq!(
+                !config.options.contains_key(key),
+                is_build_server_option(key)
+            );
+            assert_eq!(
+                stored["options"].get(key).is_none(),
+                is_build_server_option(key)
+            );
+        }
+        if !is_build_server_option("relay-server") {
+            assert_eq!(config.options["relay-server"], "relay.example.test");
+            assert_eq!(config.options["api-server"], "https://api.example.test");
+        }
+    }
+
+    #[test]
+    fn test_build_server_option_writes() {
+        let _lock = CONFIG_STATE_TEST_LOCK.lock().unwrap();
+        struct RestoreConfig2(Config2);
+        impl Drop for RestoreConfig2 {
+            fn drop(&mut self) {
+                *CONFIG2.write().unwrap() = self.0.clone();
+            }
+        }
+        let _state = RestoreConfig2(Config2::get());
+        let _file = ConfigFileRestoreGuard::new(Config2::file());
+        let mut config = Config2::default();
+        config.rendezvous_server = "stored.example.test".to_owned();
+        config.options.insert(
+            "custom-rendezvous-server".to_owned(),
+            "stored.example.test".to_owned(),
+        );
+        config
+            .options
+            .insert("key".to_owned(), "stored-key".to_owned());
+        config
+            .options
+            .insert("relay-server".to_owned(), "relay.example.test".to_owned());
+        config.options.insert(
+            "api-server".to_owned(),
+            "https://api.example.test".to_owned(),
+        );
+        Config2::set(config);
+        let replaced = Config2::get();
+        assert_eq!(
+            replaced.rendezvous_server.is_empty(),
+            get_build_server_option("custom-rendezvous-server").is_some()
+        );
+        for key in [
+            "custom-rendezvous-server",
+            "relay-server",
+            "api-server",
+            "key",
+        ] {
+            assert_eq!(
+                replaced.options.contains_key(key),
+                get_build_server_option(key).is_none()
+            );
+            Config::set_option(key.to_owned(), "changed-value".to_owned());
+            let expected = get_build_server_option(key).unwrap_or("changed-value");
+            assert_eq!(Config::get_option(key), expected);
+            assert_eq!(
+                Config::get_options().get(key).map(String::as_str),
+                Some(expected)
+            );
+        }
+        let mut options = Config::get_options();
+        options.insert(
+            "relay-server".to_owned(),
+            "updated-relay.example.test".to_owned(),
+        );
+        options.insert(
+            "api-server".to_owned(),
+            "https://api.example.test".to_owned(),
+        );
+        options.insert("unrelated-option".to_owned(), "kept-value".to_owned());
+        Config::set_options(options);
+        let stored: Config2 = Config::load_("2");
+        for key in [
+            "custom-rendezvous-server",
+            "relay-server",
+            "api-server",
+            "key",
+        ] {
+            assert_eq!(
+                stored.options.contains_key(key),
+                get_build_server_option(key).is_none()
+            );
+        }
+        assert_eq!(
+            Config::get_option("relay-server"),
+            get_build_server_option("relay-server").unwrap_or("updated-relay.example.test")
+        );
+        assert_eq!(
+            Config::get_option("api-server"),
+            get_build_server_option("api-server").unwrap_or("https://api.example.test")
+        );
+        assert_eq!(stored.options["unrelated-option"], "kept-value");
     }
 
     #[test]

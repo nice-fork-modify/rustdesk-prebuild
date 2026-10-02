@@ -684,6 +684,13 @@ async fn test_nat_type_() -> ResultType<bool> {
 }
 
 pub async fn get_rendezvous_server(ms_timeout: u64) -> (String, Vec<String>, bool) {
+    if let Some(server) = config::get_build_server_option("custom-rendezvous-server") {
+        return (
+            socket_client::check_port(server, config::RENDEZVOUS_PORT),
+            Vec::new(),
+            true,
+        );
+    }
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let (mut a, mut b) = get_rendezvous_server_(ms_timeout);
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1063,6 +1070,9 @@ pub fn is_setup(name: &str) -> bool {
 }
 
 pub fn get_custom_rendezvous_server(custom: String) -> String {
+    if let Some(server) = config::get_build_server_option("custom-rendezvous-server") {
+        return server.to_owned();
+    }
     #[cfg(windows)]
     if let Ok(lic) = crate::platform::windows::get_license_from_exe_name() {
         if !lic.host.is_empty() {
@@ -1097,13 +1107,16 @@ pub fn get_api_server(api: String, custom: String) -> String {
 }
 
 fn get_api_server_(api: String, custom: String) -> String {
+    let api_fixed = config::get_build_server_option("api-server").is_some();
     #[cfg(windows)]
-    if let Ok(lic) = crate::platform::windows::get_license_from_exe_name() {
-        if !lic.api.is_empty() {
-            return lic.api.clone();
+    if !api_fixed {
+        if let Ok(lic) = crate::platform::windows::get_license_from_exe_name() {
+            if !lic.api.is_empty() {
+                return lic.api.clone();
+            }
         }
     }
-    if !api.is_empty() {
+    if !api_fixed && !api.is_empty() {
         return api.to_owned();
     }
     let s0 = get_custom_rendezvous_server(custom);
@@ -1837,6 +1850,9 @@ pub fn decode64<T: AsRef<[u8]>>(input: T) -> Result<Vec<u8>, base64::DecodeError
 }
 
 pub async fn get_key(sync: bool) -> String {
+    if let Some(key) = config::get_build_server_option("key") {
+        return key.to_owned();
+    }
     #[cfg(windows)]
     if let Ok(lic) = crate::platform::windows::get_license_from_exe_name() {
         if !lic.key.is_empty() {
@@ -2193,6 +2209,7 @@ fn read_custom_client_advanced_settings(
             }
         }
     }
+    config::apply_build_server_options(&mut server_settings);
 }
 
 #[inline]
