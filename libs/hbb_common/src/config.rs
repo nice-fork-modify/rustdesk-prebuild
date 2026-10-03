@@ -2461,7 +2461,7 @@ impl UserDefaultConfig {
             #[cfg(any(target_os = "android", target_os = "ios"))]
             keys::OPTION_VIEW_STYLE => self.get_string(key, "adaptive", vec!["original"]),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            keys::OPTION_VIEW_STYLE => self.get_string(key, "original", vec!["adaptive"]),
+            keys::OPTION_VIEW_STYLE => self.get_string(key, "adaptive", vec!["original"]),
             keys::OPTION_SCROLL_STYLE => {
                 self.get_string(key, "scrollauto", vec!["scrolledge", "scrollbar"])
             }
@@ -2474,6 +2474,9 @@ impl UserDefaultConfig {
             keys::OPTION_CUSTOM_IMAGE_QUALITY => self.get_num_string(key, 50.0, 10.0, 0xFFF as f64),
             keys::OPTION_CUSTOM_FPS => self.get_num_string(key, 30.0, 5.0, 120.0),
             keys::OPTION_ENABLE_FILE_COPY_PASTE => self.get_string(key, "Y", vec!["", "N"]),
+            keys::OPTION_LOCK_AFTER_SESSION_END => {
+                self.get_after(key).unwrap_or_else(|| "Y".to_owned())
+            }
             keys::OPTION_EDGE_SCROLL_EDGE_THICKNESS => self.get_num_string(key, 100, 20, 150),
             keys::OPTION_TRACKPAD_SPEED => self.get_num_string(key, 100, 10, 1000),
             _ => self
@@ -3431,6 +3434,33 @@ mod tests {
         }
     }
 
+    struct UserDefaultConfigTestGuard {
+        original: (UserDefaultConfig, Instant),
+        _file_guard: ConfigFileRestoreGuard,
+    }
+
+    impl UserDefaultConfigTestGuard {
+        fn new() -> Self {
+            let file_guard = ConfigFileRestoreGuard::new(Config::file_("_default"));
+            let cfg = UserDefaultConfig::default();
+            cfg.store();
+            let original = std::mem::replace(
+                &mut *USER_DEFAULT_CONFIG.write().unwrap(),
+                (cfg, Instant::now()),
+            );
+            Self {
+                original,
+                _file_guard: file_guard,
+            }
+        }
+    }
+
+    impl Drop for UserDefaultConfigTestGuard {
+        fn drop(&mut self) {
+            *USER_DEFAULT_CONFIG.write().unwrap() = self.original.clone();
+        }
+    }
+
     fn with_config_and_hard_settings<R>(
         config: Config,
         hard_settings: HashMap<String, String>,
@@ -4266,6 +4296,71 @@ api-server = "https://api.example.test"
             let cfg = toml::from_str::<PeerConfig>(wrong_field_str);
             assert_eq!(cfg, Ok(cfg_to_compare), "Failed to test wrong_field_str");
         }
+    }
+
+    #[test]
+    fn test_experience_defaults() {
+        let _lock = CONFIG_STATE_TEST_LOCK.lock().unwrap();
+        let _guard = UserDefaultConfigTestGuard::new();
+        let cfg = UserDefaultConfig::default();
+        assert_eq!(cfg.get(keys::OPTION_LOCK_AFTER_SESSION_END), "Y");
+        assert_eq!(cfg.get(keys::OPTION_VIEW_STYLE), "adaptive");
+        let peer: PeerConfig = toml::from_str("").unwrap();
+        assert!(peer.lock_after_session_end.v);
+        assert_eq!(peer.view_style, "adaptive");
+    }
+
+    #[test]
+    fn test_experience_defaults_preserve_explicit_values() {
+        let _lock = CONFIG_STATE_TEST_LOCK.lock().unwrap();
+        let _guard = UserDefaultConfigTestGuard::new();
+        let cfg = UserDefaultConfig {
+            options: HashMap::from([
+                (
+                    keys::OPTION_LOCK_AFTER_SESSION_END.to_owned(),
+                    "N".to_owned(),
+                ),
+                (keys::OPTION_VIEW_STYLE.to_owned(), "original".to_owned()),
+            ]),
+        };
+        assert_eq!(cfg.get(keys::OPTION_LOCK_AFTER_SESSION_END), "N");
+        assert_eq!(cfg.get(keys::OPTION_VIEW_STYLE), "original");
+        let peer: PeerConfig = toml::from_str(
+            "lock_after_session_end = false\nview_style = \"original\"",
+        )
+        .unwrap();
+        assert!(!peer.lock_after_session_end.v);
+        assert_eq!(peer.view_style, "original");
+        let reloaded: PeerConfig =
+            toml::from_str(&toml::to_string_pretty(&peer).unwrap()).unwrap();
+        assert!(!reloaded.lock_after_session_end.v);
+        assert_eq!(reloaded.view_style, "original");
+    }
+
+    #[test]
+    fn test_experience_defaults_disabled_lock_persists() {
+        let _lock = CONFIG_STATE_TEST_LOCK.lock().unwrap();
+        let _guard = UserDefaultConfigTestGuard::new();
+        let mut cfg = UserDefaultConfig::default();
+        cfg.set(
+            keys::OPTION_LOCK_AFTER_SESSION_END.to_owned(),
+            "N".to_owned(),
+        );
+        cfg.set(keys::OPTION_VIEW_STYLE.to_owned(), "original".to_owned());
+        let loaded = UserDefaultConfig::load();
+        assert_eq!(loaded.get(keys::OPTION_LOCK_AFTER_SESSION_END), "N");
+        assert_eq!(loaded.get(keys::OPTION_VIEW_STYLE), "original");
+        assert_eq!(loaded.options[keys::OPTION_LOCK_AFTER_SESSION_END], "N");
+
+        let peer_id = "defaults-lock-persistence-test";
+        let _peer_guard = ConfigFileRestoreGuard::new(PeerConfig::path(peer_id));
+        let mut peer = PeerConfig::default();
+        peer.lock_after_session_end.v = false;
+        peer.view_style = "original".to_owned();
+        peer.store(peer_id);
+        let reloaded = PeerConfig::load(peer_id);
+        assert!(!reloaded.lock_after_session_end.v);
+        assert_eq!(reloaded.view_style, "original");
     }
 
     #[test]

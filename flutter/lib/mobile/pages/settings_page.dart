@@ -1238,7 +1238,12 @@ class __DisplayPageState extends State<_DisplayPage> {
           ? null
           : (b) async {
               await bind.mainSetUserDefaultOption(
-                  key: key, value: b ? 'Y' : defaultOptionNo);
+                  key: key,
+                  value: b
+                      ? 'Y'
+                      : (key == kOptionLockAfterSessionEnd
+                          ? 'N'
+                          : defaultOptionNo));
               setState(() {});
             },
     );

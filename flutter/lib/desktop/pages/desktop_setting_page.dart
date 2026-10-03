@@ -2037,7 +2037,10 @@ class _DisplayState extends State<_Display> {
           key: key,
           value: b
               ? 'Y'
-              : (key == kOptionEnableFileCopyPaste ? 'N' : defaultOptionNo));
+              : (key == kOptionEnableFileCopyPaste ||
+                      key == kOptionLockAfterSessionEnd
+                  ? 'N'
+                  : defaultOptionNo));
       setState(() {});
     }
 
