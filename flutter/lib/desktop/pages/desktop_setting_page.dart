@@ -22,10 +22,10 @@ import 'package:flutter_hbb/plugin/widgets/desktop_settings.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:url_launcher/url_launcher_string.dart';
 
 import '../../common/widgets/dialog.dart';
 import '../../common/widgets/login.dart';
+import '../../utils/multi_window_manager.dart';
 
 const double _kTabWidth = 200;
 const double _kTabHeight = 42;
@@ -455,7 +455,11 @@ class _GeneralState extends State<_General> {
   }
 
   Widget service() {
-    if (bind.isOutgoingOnly()) {
+    final outgoingOnly = bind.isOutgoingOnly();
+    final showInstall = isWindows &&
+        !bind.mainIsInstalled() &&
+        !bind.isDisableInstallation();
+    if (outgoingOnly && !showInstall) {
       return const Offstage();
     }
 
@@ -463,21 +467,31 @@ class _GeneralState extends State<_General> {
         bind.mainGetBuildinOption(key: kOptionHideStopService) == 'Y';
 
     return Obx(() {
-      if (hideStopService && !serviceStop.value) {
+      final stopped = serviceStop.value;
+      final showService = !outgoingOnly && (!hideStopService || stopped);
+      if (!showInstall && !showService) {
         return const Offstage();
       }
 
       return _Card(title: 'Service', children: [
-        _Button(serviceStop.value ? 'Start' : 'Stop', () {
-          () async {
-            serviceBtnEnabled.value = false;
-            await start_service(serviceStop.value);
-            // enable the button after 1 second
-            Future.delayed(const Duration(seconds: 1), () {
-              serviceBtnEnabled.value = true;
-            });
-          }();
-        }, enabled: serviceBtnEnabled.value)
+        Row(children: [
+          if (showInstall)
+            _Button('Install', () async {
+              await rustDeskWinManager.closeAllSubWindows();
+              bind.mainGotoInstall();
+            }),
+          if (showService)
+            _Button(serviceStop.value ? 'Start' : 'Stop', () {
+              () async {
+                serviceBtnEnabled.value = false;
+                await start_service(serviceStop.value);
+                // enable the button after 1 second
+                Future.delayed(const Duration(seconds: 1), () {
+                  serviceBtnEnabled.value = true;
+                });
+              }();
+            }, enabled: serviceBtnEnabled.value)
+        ])
       ]);
     });
   }
@@ -2413,22 +2427,18 @@ class _AboutState extends State<_About> {
   @override
   Widget build(BuildContext context) {
     return futureBuilder(future: () async {
-      final license = await bind.mainGetLicense();
       final version = await bind.mainGetVersion();
       final buildDate = await bind.mainGetBuildDate();
       final fingerprint = await bind.mainGetFingerprint();
       return {
-        'license': license,
         'version': version,
         'buildDate': buildDate,
         'fingerprint': fingerprint
       };
     }(), hasData: (data) {
-      final license = data['license'].toString();
       final version = data['version'].toString();
       final buildDate = data['buildDate'].toString();
       final fingerprint = data['fingerprint'].toString();
-      const linkStyle = TextStyle(decoration: TextDecoration.underline);
       final scrollController = ScrollController();
       return SingleChildScrollView(
         controller: scrollController,
@@ -2449,22 +2459,6 @@ class _AboutState extends State<_About> {
                 SelectionArea(
                     child: Text('${translate('Fingerprint')}: $fingerprint')
                         .marginSymmetric(vertical: 4.0)),
-              InkWell(
-                  onTap: () {
-                    launchUrlString('https://rustdesk.com/privacy.html');
-                  },
-                  child: Text(
-                    translate('Privacy Statement'),
-                    style: linkStyle,
-                  ).marginSymmetric(vertical: 4.0)),
-              InkWell(
-                  onTap: () {
-                    launchUrlString('https://rustdesk.com');
-                  },
-                  child: Text(
-                    translate('Website'),
-                    style: linkStyle,
-                  ).marginSymmetric(vertical: 4.0)),
               Container(
                 decoration: const BoxDecoration(color: Color(0xFF2c8cff)),
                 padding:
@@ -2476,10 +2470,6 @@ class _AboutState extends State<_About> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            'Copyright © ${DateTime.now().toString().substring(0, 4)} Purslane Tech Pte. Ltd.\n$license',
-                            style: const TextStyle(color: Colors.white),
-                          ),
                           Text(
                             translate('Slogan_tip'),
                             style: TextStyle(
