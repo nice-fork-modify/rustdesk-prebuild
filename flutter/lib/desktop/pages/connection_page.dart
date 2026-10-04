@@ -18,6 +18,7 @@ import '../../common.dart';
 import '../../common/formatter/id_formatter.dart';
 import '../../common/widgets/peer_tab_page.dart';
 import '../../common/widgets/autocomplete.dart';
+import '../../common/widgets/connection_password.dart';
 import '../../models/platform_model.dart';
 import '../../desktop/widgets/material_mod_popup_menu.dart' as mod_menu;
 
@@ -204,6 +205,7 @@ class _ConnectionPageState extends State<ConnectionPage>
   final RxBool _idInputFocused = false.obs;
   final FocusNode _idFocusNode = FocusNode();
   final TextEditingController _idEditingController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
 
   String selectedConnectionType = 'Connect';
 
@@ -244,6 +246,7 @@ class _ConnectionPageState extends State<ConnectionPage>
     _idFocusNode.removeListener(onFocusChanged);
     _idFocusNode.dispose();
     _idEditingController.dispose();
+    _passwordController.dispose();
     if (Get.isRegistered<IDTextEditingController>()) {
       Get.delete<IDTextEditingController>();
     }
@@ -335,14 +338,15 @@ class _ConnectionPageState extends State<ConnectionPage>
     connect(context, id,
         isFileTransfer: isFileTransfer,
         isViewCamera: isViewCamera,
-        isTerminal: isTerminal);
+        isTerminal: isTerminal,
+        password: passwordForConnection(_passwordController.text));
   }
 
   /// UI for the remote ID TextField.
   /// Search for a peer.
   Widget _buildRemoteIDTextField(BuildContext context) {
     var w = Container(
-      width: 320 + 20 * 2,
+      width: double.infinity,
       padding: const EdgeInsets.fromLTRB(20, 24, 20, 22),
       decoration: BoxDecoration(
           borderRadius: const BorderRadius.all(Radius.circular(13)),
@@ -354,6 +358,7 @@ class _ConnectionPageState extends State<ConnectionPage>
             Row(
               children: [
                 Expanded(
+                    flex: 2,
                     child: RawAutocomplete<Peer>(
                   optionsBuilder: (TextEditingValue textEditingValue) {
                     if (textEditingValue.text == '') {
@@ -446,6 +451,7 @@ class _ConnectionPageState extends State<ConnectionPage>
                   onSelected: (option) {
                     setState(() {
                       _idController.id = option.id;
+                      _passwordController.text = option.password;
                       FocusScope.of(context).unfocus();
                     });
                   },
@@ -511,6 +517,21 @@ class _ConnectionPageState extends State<ConnectionPage>
                     );
                   },
                 )),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ConnectionPasswordField(
+                    controller: _passwordController,
+                    label: translate('Password'),
+                    filled: false,
+                    textAlignVertical: TextAlignVertical.center,
+                    style: const TextStyle(
+                      fontFamily: 'WorkSans',
+                      fontSize: 22,
+                      height: 1.4,
+                    ),
+                    onSubmitted: (_) => onConnect(),
+                  ),
+                ),
               ],
             ),
             Padding(
@@ -610,7 +631,6 @@ class _ConnectionPageState extends State<ConnectionPage>
         ),
       ),
     );
-    return Container(
-        constraints: const BoxConstraints(maxWidth: 600), child: w);
+    return w.marginOnly(right: 12);
   }
 }

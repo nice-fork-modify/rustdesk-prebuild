@@ -13,6 +13,7 @@ import 'package:flutter_hbb/models/peer_model.dart';
 import '../../common.dart';
 import '../../common/widgets/peer_tab_page.dart';
 import '../../common/widgets/autocomplete.dart';
+import '../../common/widgets/connection_password.dart';
 import '../../consts.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
@@ -43,6 +44,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
 
   final FocusNode _idFocusNode = FocusNode();
   final TextEditingController _idEditingController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
 
   final AllPeersLoader _allPeersLoader = AllPeersLoader();
 
@@ -100,7 +102,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
   /// Connects to the selected peer.
   void onConnect() {
     var id = _idController.id;
-    connect(context, id);
+    connect(context, id,
+        password: passwordForConnection(_passwordController.text));
   }
 
   void onFocusChanged() {
@@ -261,6 +264,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                     onSelected: (option) {
                       setState(() {
                         _idController.id = option.id;
+                        _passwordController.text = option.password;
                         FocusScope.of(context).unfocus();
                       });
                     },
@@ -352,7 +356,20 @@ class _ConnectionPageState extends State<ConnectionPage> {
       if (isWebDesktop)
         getConnectionPageTitle(context, true)
             .marginOnly(bottom: 10, top: 15, left: 12),
-      w
+      w,
+      Container(
+        margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: Theme.of(context).cardColor,
+          borderRadius: const BorderRadius.all(Radius.circular(13)),
+        ),
+        child: ConnectionPasswordField(
+          controller: _passwordController,
+          label: translate('Password'),
+          onSubmitted: (_) => onConnect(),
+        ),
+      ),
     ]);
     return Align(
         alignment: Alignment.topCenter,
@@ -367,6 +384,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
     _allPeersLoader.clear();
     _idFocusNode.dispose();
     _idEditingController.dispose();
+    _passwordController.dispose();
     if (Get.isRegistered<IDTextEditingController>()) {
       Get.delete<IDTextEditingController>();
     }
