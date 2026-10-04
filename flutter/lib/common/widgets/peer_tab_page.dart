@@ -84,8 +84,9 @@ class _PeerTabPageState extends State<PeerTabPage>
               ? PeerUiType.tile
               : PeerUiType.list;
     }
-    hideAbTagsPanel.value =
-        bind.mainGetLocalOption(key: kOptionHideAbTagsPanel) == 'Y';
+    hideAbTagsPanel.value = mainGetLocalBoolOptionSync(kOptionHideAbTagsPanel);
+    hideMyGroupUsersPanel.value =
+        mainGetLocalBoolOptionSync(kOptionHideMyGroupUsersPanel);
   }
 
   Future<void> handleTabSelection(int tabIndex) async {
@@ -542,10 +543,25 @@ class _PeerTabPageState extends State<PeerTabPage>
           size: 18,
         ),
         onTap: () async {
-          await bind.mainSetLocalOption(
-              key: kOptionHideAbTagsPanel,
-              value: hideAbTagsPanel.value ? defaultOptionNo : "Y");
+          await mainSetLocalBoolOption(
+              kOptionHideAbTagsPanel, !hideAbTagsPanel.value);
           hideAbTagsPanel.value = !hideAbTagsPanel.value;
+        });
+  }
+
+  Widget _toggleUsers() {
+    return _hoverAction(
+        context: context,
+        toolTip: translate('Show users'),
+        hoverableWhenfalse: hideMyGroupUsersPanel,
+        child: Icon(
+          Icons.people_outline,
+          size: 18,
+        ),
+        onTap: () async {
+          await mainSetLocalBoolOption(
+              kOptionHideMyGroupUsersPanel, !hideMyGroupUsersPanel.value);
+          hideMyGroupUsersPanel.value = !hideMyGroupUsersPanel.value;
         });
   }
 
@@ -569,6 +585,10 @@ class _PeerTabPageState extends State<PeerTabPage>
       Offstage(
         offstage: model.currentTab != PeerTabIndex.ab.index,
         child: _toggleTags(),
+      ),
+      Offstage(
+        offstage: model.currentTab != PeerTabIndex.group.index,
+        child: _toggleUsers(),
       ),
     ];
   }
@@ -630,7 +650,8 @@ class _PeerTabPageState extends State<PeerTabPage>
     final List<Widget> dynamicActions = [
       if (model.currentTabCachedPeers.isNotEmpty) _createMultiSelection(),
       if (model.currentTab != PeerTabIndex.recent.index) PeerSortDropdown(),
-      if (model.currentTab == PeerTabIndex.ab.index) _toggleTags()
+      if (model.currentTab == PeerTabIndex.ab.index) _toggleTags(),
+      if (model.currentTab == PeerTabIndex.group.index) _toggleUsers()
     ];
     final rightWidth = availableWidth -
         searchWidth -

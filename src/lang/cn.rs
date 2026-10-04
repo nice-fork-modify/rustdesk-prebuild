@@ -521,6 +521,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("List View", "列表视图"),
         ("Select", "选择"),
         ("Toggle Tags", "切换标签"),
+        ("Show users", "显示用户"),
         ("pull_ab_failed_tip", "获取地址簿失败"),
         ("push_ab_failed_tip", "上传地址簿失败"),
         ("synced_peer_readded_tip", "最近会话中存在的设备将会被重新同步到地址簿。"),

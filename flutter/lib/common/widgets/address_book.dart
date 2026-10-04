@@ -22,7 +22,7 @@ import '../../common.dart';
 import 'dialog.dart';
 import 'login.dart';
 
-final hideAbTagsPanel = false.obs;
+final hideAbTagsPanel = true.obs;
 
 class AddressBook extends StatefulWidget {
   final EdgeInsets? menuPadding;

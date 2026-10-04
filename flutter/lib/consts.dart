@@ -151,6 +151,7 @@ const String kOptionRemoteMenubarFraction = "remote-menubar-frac";
 const String kOptionAllowMultiEdgeToolbarDock =
     "allow-multi-edge-toolbar-dock";
 const String kOptionHideAbTagsPanel = "hideAbTagsPanel";
+const String kOptionHideMyGroupUsersPanel = "hideMyGroupUsersPanel";
 const String kOptionRemoteMenubarState = "remoteMenubarState";
 const String kOptionPeerSorting = "peer-sorting";
 const String kOptionPeerTabIndex = "peer-tab-index";

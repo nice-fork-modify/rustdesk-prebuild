@@ -9,6 +9,8 @@ import 'package:get/get.dart';
 
 import '../../common.dart';
 
+final hideMyGroupUsersPanel = true.obs;
+
 class MyGroup extends StatefulWidget {
   final EdgeInsets? menuPadding;
   const MyGroup({Key? key, this.menuPadding}) : super(key: key);
@@ -60,28 +62,29 @@ class _MyGroupState extends State<MyGroup> {
   Widget _buildLandscape() {
     return Row(
       children: [
-        Container(
-          decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              border:
-                  Border.all(color: Theme.of(context).colorScheme.background)),
-          child: Container(
-            width: 150,
-            height: double.infinity,
-            child: Column(
-              children: [
-                _buildLeftHeader(),
-                Expanded(
-                  child: Container(
-                    width: double.infinity,
-                    height: double.infinity,
-                    child: _buildLeftList(),
-                  ),
-                )
-              ],
+        if (!hideMyGroupUsersPanel.value)
+          Container(
+            decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                    color: Theme.of(context).colorScheme.background)),
+            child: Container(
+              width: 150,
+              height: double.infinity,
+              child: Column(
+                children: [
+                  _buildLeftHeader(),
+                  Expanded(
+                    child: Container(
+                      width: double.infinity,
+                      height: double.infinity,
+                      child: _buildLeftList(),
+                    ),
+                  )
+                ],
+              ),
             ),
-          ),
-        ).marginOnly(right: 12.0),
+          ).marginOnly(right: 12.0),
         Expanded(
           child: Align(
               alignment: Alignment.topLeft,
@@ -96,24 +99,25 @@ class _MyGroupState extends State<MyGroup> {
   Widget _buildPortrait() {
     return Column(
       children: [
-        Container(
-          decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(6),
-              border:
-                  Border.all(color: Theme.of(context).colorScheme.background)),
-          child: Container(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildLeftHeader(),
-                Container(
-                  width: double.infinity,
-                  child: _buildLeftList(),
-                )
-              ],
+        if (!hideMyGroupUsersPanel.value)
+          Container(
+            decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                    color: Theme.of(context).colorScheme.background)),
+            child: Container(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildLeftHeader(),
+                  Container(
+                    width: double.infinity,
+                    child: _buildLeftList(),
+                  )
+                ],
+              ),
             ),
-          ),
-        ).marginOnly(bottom: 12.0),
+          ).marginOnly(bottom: 12.0),
         Expanded(
           child: Align(
               alignment: Alignment.topLeft,
