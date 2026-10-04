@@ -2844,6 +2844,17 @@ pub fn main_get_common(key: String) -> String {
         return ui_interface::is_permanent_password_set().to_string();
     } else if key == "local-permanent-password-set" {
         return ui_interface::is_local_permanent_password_set().to_string();
+    } else if key == "permanent-password-display" {
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        return config::Config::get_permanent_password_display();
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        return match crate::ipc::get_config("permanent-password-display") {
+            Ok(value) => value.unwrap_or_default(),
+            Err(err) => {
+                log::warn!("Failed to query permanent password display from daemon: {err}");
+                String::new()
+            }
+        };
     } else {
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         if let Some(url) = key.strip_prefix("update-download-url-") {

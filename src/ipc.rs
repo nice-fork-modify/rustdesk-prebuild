@@ -830,8 +830,11 @@ async fn handle(data: Data, stream: &mut Connection) {
                 } else if name == "temporary-password" {
                     value = Some(password::temporary_password());
                 } else if name == "permanent-password-storage-and-salt" {
-                    let (storage, salt) = Config::get_local_permanent_password_storage_and_salt();
-                    value = Some(storage + "\n" + &salt);
+                    let (storage, salt, encrypted_plaintext) =
+                        Config::get_local_permanent_password_storage_for_sync();
+                    value = Some(storage + "\n" + &salt + "\n" + &encrypted_plaintext);
+                } else if name == "permanent-password-display" {
+                    value = Some(Config::get_permanent_password_display());
                 } else if name == "permanent-password-set" {
                     value = Some(if Config::has_permanent_password() {
                         "Y".to_owned()
@@ -1538,11 +1541,14 @@ fn apply_permanent_password_storage_and_salt_payload(payload: Option<&str>) -> R
     let Some(payload) = payload else {
         return Ok(());
     };
-    let Some((storage, salt)) = payload.split_once('\n') else {
+    let Some((storage, rest)) = payload.split_once('\n') else {
+        bail!("Invalid permanent-password-storage-and-salt payload");
+    };
+    let Some((salt, encrypted_plaintext)) = rest.split_once('\n') else {
         bail!("Invalid permanent-password-storage-and-salt payload");
     };
 
-    Config::set_permanent_password_storage_for_sync(storage, salt)?;
+    Config::set_permanent_password_storage_for_sync(storage, salt, encrypted_plaintext)?;
     Ok(())
 }
 
@@ -2129,6 +2135,14 @@ pub async fn set_install_option(k: String, v: String) -> ResultType<()> {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_permanent_password_storage_payload_requires_all_fields() {
+        assert!(apply_permanent_password_storage_and_salt_payload(None).is_ok());
+        for payload in ["", "storage", "storage\nsalt"] {
+            assert!(apply_permanent_password_storage_and_salt_payload(Some(payload)).is_err());
+        }
+    }
 
     #[test]
     fn verify_ffi_enum_data_size() {

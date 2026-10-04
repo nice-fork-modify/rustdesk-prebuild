@@ -75,6 +75,10 @@ fn encrypt_permanent_password_storage(storage: &str) -> Option<String> {
     if storage.chars().count() > ENCRYPT_MAX_LEN {
         return None;
     }
+    encrypt_permanent_password_plaintext(storage)
+}
+
+pub(super) fn encrypt_permanent_password_plaintext(storage: &str) -> Option<String> {
     let encrypted = symmetric_crypt(storage.as_bytes(), true).ok()?;
     Some(
         PERMANENT_PASSWORD_ENC_VERSION.to_owned()

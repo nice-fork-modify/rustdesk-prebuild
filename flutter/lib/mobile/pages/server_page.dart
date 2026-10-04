@@ -10,6 +10,7 @@ import 'package:provider/provider.dart';
 
 import '../../common.dart';
 import '../../common/widgets/dialog.dart';
+import '../../common/widgets/home_permanent_password.dart';
 import '../../consts.dart';
 import '../../models/platform_model.dart';
 import '../../models/server_model.dart';
@@ -181,12 +182,26 @@ class _DropDownAction extends StatelessWidget {
 
 class _ServerPageState extends State<ServerPage> {
   Timer? _updateTimer;
+  String _permanentPassword = '';
+  bool _permanentPasswordSet = false;
 
   @override
   void initState() {
     super.initState();
     _updateTimer = periodic_immediate(const Duration(seconds: 3), () async {
       await gFFI.serverModel.fetchID();
+      final password =
+          await bind.mainGetCommon(key: 'permanent-password-display');
+      final passwordSet =
+          await bind.mainGetCommon(key: 'permanent-password-set') == 'true';
+      if (mounted &&
+          (_permanentPassword != password ||
+              _permanentPasswordSet != passwordSet)) {
+        setState(() {
+          _permanentPassword = password;
+          _permanentPasswordSet = passwordSet;
+        });
+      }
     });
     gFFI.serverModel.checkAndroidPermission();
   }
@@ -211,7 +226,10 @@ class _ServerPageState extends State<ServerPage> {
                       children: [
                         buildPresetPasswordWarningMobile(),
                         gFFI.serverModel.isStart
-                            ? ServerInfo()
+                            ? ServerInfo(
+                                permanentPassword: _permanentPassword,
+                                permanentPasswordSet: _permanentPasswordSet,
+                              )
                             : ServiceNotRunningNotification(),
                         const ConnectionManager(),
                         const PermissionChecker(),
@@ -464,7 +482,14 @@ class ServerInfo extends StatelessWidget {
   final model = gFFI.serverModel;
   final emptyController = TextEditingController(text: "-");
 
-  ServerInfo({Key? key}) : super(key: key);
+  final String permanentPassword;
+  final bool permanentPasswordSet;
+
+  ServerInfo({
+    Key? key,
+    required this.permanentPassword,
+    required this.permanentPasswordSet,
+  }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -510,7 +535,7 @@ class ServerInfo extends StatelessWidget {
     final showOneTime = serverModel.approveMode != 'click' &&
         serverModel.verificationMethod != kUsePermanentPassword;
     return PaddingCard(
-        title: translate('Your Device'),
+        title: translate('Device Code'),
         child: Column(
           // ID
           children: [
@@ -565,6 +590,27 @@ class ServerInfo extends StatelessWidget {
                           })
                     ])
             ]).marginOnly(left: 40, bottom: 15),
+            HomePermanentPassword(
+              password: permanentPassword,
+              isSet: permanentPasswordSet,
+              label: translate('Permanent Password'),
+              configureLabel: translate('Set permanent password'),
+              showLabel: translate('Show Password'),
+              hideLabel: translate('Hide Password'),
+              unavailableLabel: permanentPasswordSet
+                  ? translate('Reset password to reveal')
+                  : translate('Set permanent password'),
+              accentColor: MyTheme.accent,
+              onConfigure: !bind.isDisableSettings() &&
+                      bind.mainGetBuildinOption(
+                              key: kOptionHideSecuritySetting) !=
+                          'Y' &&
+                      !isChangePermanentPasswordDisabled() &&
+                      serverModel.approveMode != 'click' &&
+                      serverModel.verificationMethod != kUseTemporaryPassword
+                  ? setPasswordDialog
+                  : null,
+            ),
             ConnectionStateNotification()
           ],
         ));

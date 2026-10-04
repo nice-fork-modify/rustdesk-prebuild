@@ -8,10 +8,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/animated_rotation_widget.dart';
 import 'package:flutter_hbb/common/widgets/custom_password.dart';
+import 'package:flutter_hbb/common/widgets/dialog.dart';
+import 'package:flutter_hbb/common/widgets/home_permanent_password.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/connection_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
-import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/desktop/widgets/update_progress.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/server_model.dart';
@@ -50,6 +51,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   var watchIsCanRecordAudio = false;
   Timer? _updateTimer;
   bool isCardClosed = false;
+  String _permanentPassword = '';
+  bool _permanentPasswordSet = false;
 
   final RxBool _editHover = false.obs;
   final RxBool _block = false.obs;
@@ -216,8 +219,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                                   .titleLarge
                                   ?.color
                                   ?.withOpacity(0.5)),
-                        ).marginOnly(top: 5),
-                        buildPopupMenu(context)
+                        ).marginOnly(top: 5)
                       ],
                     ),
                   ),
@@ -250,39 +252,51 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     );
   }
 
-  Widget buildPopupMenu(BuildContext context) {
-    final textColor = Theme.of(context).textTheme.titleLarge?.color;
-    RxBool hover = false.obs;
-    return InkWell(
-      onTap: DesktopTabPage.onAddSetting,
-      child: Tooltip(
-        message: translate('Settings'),
-        child: Obx(
-          () => CircleAvatar(
-            radius: 15,
-            backgroundColor: hover.value
-                ? Theme.of(context).scaffoldBackgroundColor
-                : Theme.of(context).colorScheme.background,
-            child: Icon(
-              Icons.more_vert_outlined,
-              size: 20,
-              color: hover.value ? textColor : textColor?.withOpacity(0.5),
-            ),
-          ),
-        ),
-      ),
-      onHover: (value) => hover.value = value,
-    );
-  }
-
   buildPasswordBoard(BuildContext context) {
     return ChangeNotifierProvider.value(
         value: gFFI.serverModel,
         child: Consumer<ServerModel>(
           builder: (context, model, child) {
-            return buildPasswordBoard2(context, model);
+            return Column(children: [
+              buildPasswordBoard2(context, model),
+              HomePermanentPassword(
+                password: _permanentPassword,
+                isSet: _permanentPasswordSet,
+                label: translate('Permanent Password'),
+                configureLabel: translate('Set permanent password'),
+                showLabel: translate('Show Password'),
+                hideLabel: translate('Hide Password'),
+                unavailableLabel: _permanentPasswordSet
+                    ? translate('Reset password to reveal')
+                    : translate('Set permanent password'),
+                accentColor: MyTheme.accent,
+                onConfigure: !bind.isDisableSettings() &&
+                        !isChangePermanentPasswordDisabled() &&
+                        bind.mainGetBuildinOption(key: 'hide-security-settings') !=
+                            'Y' &&
+                        model.approveMode != 'click' &&
+                        model.verificationMethod != kUseTemporaryPassword
+                    ? _configurePermanentPassword
+                    : null,
+              ),
+            ]);
           },
         ));
+  }
+
+  void _configurePermanentPassword() async {
+    if (!bind.mainIsInstalled()) {
+      setPasswordDialog();
+      return;
+    }
+    final unlockPin = bind.mainGetUnlockPin();
+    if (unlockPin.isEmpty || isUnlockPinDisabled()) {
+      if (await callMainCheckSuperUserPermission()) {
+        setPasswordDialog();
+      }
+    } else {
+      checkUnlockPinDialog(unlockPin, setPasswordDialog);
+    }
   }
 
   buildPasswordBoard2(BuildContext context, ServerModel model) {
@@ -398,7 +412,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    translate("Your Desktop"),
+                    translate("Device Code"),
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                 ),
@@ -407,12 +421,6 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           SizedBox(
             height: 10.0,
           ),
-          if (!isOutgoingOnly)
-            Text(
-              translate("desk_tip"),
-              overflow: TextOverflow.clip,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
           if (isOutgoingOnly)
             Text(
               translate("outgoing_only_desk_tip"),
@@ -682,6 +690,20 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     super.initState();
     _updateTimer = periodic_immediate(const Duration(seconds: 1), () async {
       await gFFI.serverModel.fetchID();
+      if (!bind.isOutgoingOnly()) {
+        final password =
+            await bind.mainGetCommon(key: 'permanent-password-display');
+        final passwordSet =
+            await bind.mainGetCommon(key: 'permanent-password-set') == 'true';
+        if (mounted &&
+            (_permanentPassword != password ||
+                _permanentPasswordSet != passwordSet)) {
+          setState(() {
+            _permanentPassword = password;
+            _permanentPasswordSet = passwordSet;
+          });
+        }
+      }
       final error = await bind.mainGetError();
       if (systemError != error) {
         systemError = error;
