@@ -162,9 +162,14 @@ class ServerModel with ChangeNotifier {
           debugPrint("clients not match!");
           updateClientState(res);
         } else {
+          final backendClientCount = await bind.cmGetClientsLength();
           if (_clients.isEmpty) {
             hideCmWindow();
-            if (_zeroClientLengthCounter++ == 12) {
+            // The Flutter list is UI-visible only. Keep the CM process alive
+            // while Pending/Hidden backend clients remain registered.
+            if (backendClientCount > 0) {
+              _zeroClientLengthCounter = 0;
+            } else if (_zeroClientLengthCounter++ == 12) {
               // 6 second
               windowManager.close();
             }
@@ -521,6 +526,7 @@ class ServerModel with ChangeNotifier {
     for (var clientJson in clientsJson) {
       try {
         final client = Client.fromJson(clientJson);
+        if (client.uiState != ClientUiState.visible) continue;
         _clients.add(client);
         _addTab(client);
       } catch (e) {
@@ -543,6 +549,7 @@ class ServerModel with ChangeNotifier {
   void addConnection(Map<String, dynamic> evt) {
     try {
       final client = Client.fromJson(jsonDecode(evt["client"]));
+      if (client.uiState != ClientUiState.visible) return;
       if (client.authorized) {
         parent.target?.dialogManager.dismissByTag(getLoginDialogTag(client.id));
         final index = _clients.indexWhere((c) => c.id == client.id);
@@ -761,6 +768,7 @@ class ServerModel with ChangeNotifier {
   void updateVoiceCallState(Map<String, dynamic> evt) {
     try {
       final client = Client.fromJson(jsonDecode(evt["client"]));
+      if (client.uiState != ClientUiState.visible) return;
       final index = _clients.indexWhere((element) => element.id == client.id);
       if (index != -1) {
         _clients[index].inVoiceCall = client.inVoiceCall;
@@ -810,8 +818,15 @@ enum ClientType {
   terminal,
 }
 
+enum ClientUiState {
+  pending,
+  visible,
+  hidden,
+}
+
 class Client {
   int id = 0; // client connections inner count id
+  ClientUiState uiState = ClientUiState.visible;
   bool authorized = false;
   bool isFileTransfer = false;
   bool isViewCamera = false;
@@ -840,6 +855,12 @@ class Client {
 
   Client.fromJson(Map<String, dynamic> json) {
     id = json['id'];
+    final state = (json['ui_state'] ?? 'Visible').toString().toLowerCase();
+    uiState = switch (state) {
+      'pending' => ClientUiState.pending,
+      'hidden' => ClientUiState.hidden,
+      _ => ClientUiState.visible,
+    };
     authorized = json['authorized'];
     isFileTransfer = json['is_file_transfer'];
     // TODO: no entry then default.
@@ -866,6 +887,7 @@ class Client {
   Map<String, dynamic> toJson() {
     final Map<String, dynamic> data = <String, dynamic>{};
     data['id'] = id;
+    data['ui_state'] = uiState.name;
     data['authorized'] = authorized;
     data['is_file_transfer'] = isFileTransfer;
     data['is_view_camera'] = isViewCamera;

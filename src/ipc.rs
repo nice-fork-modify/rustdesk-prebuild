@@ -4,6 +4,7 @@ mod ipc_auth;
 #[path = "ipc/fs.rs"]
 mod ipc_fs;
 
+pub use crate::common::ClientUiState;
 #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::plugin::ipc::Plugin;
@@ -315,6 +316,10 @@ pub enum Data {
         block_input: bool,
         privacy_mode: bool,
         from_switch: bool,
+        /// UI exposure policy. `None` keeps compatibility with older CM peers
+        /// and is treated as `Visible`.
+        #[serde(default)]
+        ui_state: Option<ClientUiState>,
     },
     ChatMessage {
         text: String,

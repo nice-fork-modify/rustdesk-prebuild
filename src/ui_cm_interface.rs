@@ -1,3 +1,4 @@
+use crate::common::ClientUiState;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::ipc::Connection;
 #[cfg(not(any(target_os = "ios")))]
@@ -128,6 +129,7 @@ pub fn check_file_count_limit(file_count: usize) -> Result<(), String> {
 pub struct Client {
     pub id: i32,
     pub authorized: bool,
+    pub ui_state: ClientUiState,
     pub disconnected: bool,
     pub is_file_transfer: bool,
     pub is_view_camera: bool,
@@ -233,11 +235,13 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
         block_input: bool,
         privacy_mode: bool,
         from_switch: bool,
+        ui_state: ClientUiState,
         #[cfg(not(any(target_os = "ios")))] tx: mpsc::UnboundedSender<Data>,
     ) {
         let client = Client {
             id,
             authorized,
+            ui_state,
             disconnected: false,
             is_file_transfer,
             is_view_camera,
@@ -260,12 +264,29 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
             in_voice_call: false,
             incoming_voice_call: false,
         };
+        let was_ui_visible = Self::is_ui_visible(id);
         CLIENTS
             .write()
             .unwrap()
             .retain(|_, c| !(c.disconnected && c.peer_id == client.peer_id));
         CLIENTS.write().unwrap().insert(id, client.clone());
-        self.ui_handler.add_connection(&client);
+        if was_ui_visible && client.ui_state != ClientUiState::Visible {
+            self.ui_handler.remove_connection(id, true);
+        } else if client.ui_state == ClientUiState::Visible {
+            self.ui_handler.add_connection(&client);
+        }
+    }
+
+    /// Return whether a backend client is currently exposed to the UI.
+    /// Backend lifecycle and CLIENTS membership intentionally do not depend on this.
+    #[inline]
+    pub fn is_ui_visible(id: i32) -> bool {
+        CLIENTS
+            .read()
+            .unwrap()
+            .get(&id)
+            .map(|client| client.ui_state == ClientUiState::Visible)
+            .unwrap_or(false)
     }
 
     #[inline]
@@ -280,7 +301,8 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
     }
 
     fn remove_connection(&self, id: i32, close: bool) {
-        if close {
+        let ui_visible = Self::is_ui_visible(id);
+        if close || !ui_visible {
             CLIENTS.write().unwrap().remove(&id);
         } else {
             CLIENTS
@@ -311,7 +333,9 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
             }
         }
 
-        self.ui_handler.remove_connection(id, close);
+        if ui_visible {
+            self.ui_handler.remove_connection(id, close);
+        }
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -321,28 +345,37 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
 
     #[cfg(not(target_os = "ios"))]
     fn voice_call_started(&self, id: i32) {
+        let ui_visible = Self::is_ui_visible(id);
         if let Some(client) = CLIENTS.write().unwrap().get_mut(&id) {
             client.incoming_voice_call = false;
             client.in_voice_call = true;
-            self.ui_handler.update_voice_call_state(client);
+            if ui_visible {
+                self.ui_handler.update_voice_call_state(client);
+            }
         }
     }
 
     #[cfg(not(target_os = "ios"))]
     fn voice_call_incoming(&self, id: i32) {
+        let ui_visible = Self::is_ui_visible(id);
         if let Some(client) = CLIENTS.write().unwrap().get_mut(&id) {
             client.incoming_voice_call = true;
             client.in_voice_call = false;
-            self.ui_handler.update_voice_call_state(client);
+            if ui_visible {
+                self.ui_handler.update_voice_call_state(client);
+            }
         }
     }
 
     #[cfg(not(target_os = "ios"))]
     fn voice_call_closed(&self, id: i32, _reason: &str) {
+        let ui_visible = Self::is_ui_visible(id);
         if let Some(client) = CLIENTS.write().unwrap().get_mut(&id) {
             client.incoming_voice_call = false;
             client.in_voice_call = false;
-            self.ui_handler.update_voice_call_state(client);
+            if ui_visible {
+                self.ui_handler.update_voice_call_state(client);
+            }
         }
     }
 }
@@ -445,14 +478,31 @@ pub fn switch_permission_all(name: String, enabled: bool) {
 #[inline]
 pub fn get_clients_state() -> String {
     let clients = CLIENTS.read().unwrap();
-    let res = Vec::from_iter(clients.values().cloned());
+    let res = Vec::from_iter(
+        clients
+            .values()
+            .filter(|client| client.ui_state == ClientUiState::Visible)
+            .cloned(),
+    );
     serde_json::to_string(&res).unwrap_or("".into())
 }
 
+/// Number of backend CM clients, including Pending and Hidden clients.
 #[inline]
 pub fn get_clients_length() -> usize {
     let clients = CLIENTS.read().unwrap();
     clients.len()
+}
+
+/// Number of clients currently exposed to the Flutter/Sciter UI snapshot.
+#[inline]
+pub fn get_visible_clients_length() -> usize {
+    CLIENTS
+        .read()
+        .unwrap()
+        .values()
+        .filter(|client| client.ui_state == ClientUiState::Visible)
+        .count()
 }
 
 #[inline]
@@ -543,9 +593,9 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                         }
                         Ok(Some(data)) => {
                             match data {
-                                Data::Login{id, is_file_transfer, is_view_camera, is_terminal, port_forward, peer_id, name, avatar, authorized, keyboard, clipboard, audio, file, file_transfer_enabled: _file_transfer_enabled, restart, recording, block_input, privacy_mode, from_switch} => {
+                                Data::Login{id, is_file_transfer, is_view_camera, is_terminal, port_forward, peer_id, name, avatar, authorized, keyboard, clipboard, audio, file, file_transfer_enabled: _file_transfer_enabled, restart, recording, block_input, privacy_mode, from_switch, ui_state} => {
                                     log::debug!("conn_id: {}", id);
-                                    self.cm.add_connection(id, is_file_transfer, is_view_camera, is_terminal, port_forward, peer_id, name, avatar, authorized, keyboard, clipboard, audio, file, restart, recording, block_input, privacy_mode, from_switch, self.tx.clone());
+                                    self.cm.add_connection(id, is_file_transfer, is_view_camera, is_terminal, port_forward, peer_id, name, avatar, authorized, keyboard, clipboard, audio, file, restart, recording, block_input, privacy_mode, from_switch, ui_state.unwrap_or_default(), self.tx.clone());
                                     self.conn_id = id;
                                     #[cfg(target_os = "windows")]
                                     {
@@ -571,7 +621,9 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                                     CLICK_TIME.store(ms, Ordering::SeqCst);
                                 }
                                 Data::ChatMessage { text } => {
-                                    self.cm.new_message(self.conn_id, text);
+                                    if ConnectionManager::<T>::is_ui_visible(self.conn_id) {
+                                        self.cm.new_message(self.conn_id, text);
+                                    }
                                 }
                                 Data::SwitchPermission { name, enabled } => {
                                     // Keep this branch scoped to privacy mode rollback.
@@ -587,9 +639,11 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                                             })
                                         };
                                         if let Some(client) = client {
-                                            // This reuses add_connection(), and cm.tis only selectively updates
-                                            // existing rows (authorized/privacy_mode) for this fallback path.
-                                            self.cm.ui_handler.add_connection(&client);
+                                            // This reuses add_connection(), and selectively updates the
+                                            // existing visible row for this fallback path.
+                                            if client.ui_state == ClientUiState::Visible {
+                                                self.cm.ui_handler.add_connection(&client);
+                                            }
                                         }
                                     }
                                 }
@@ -609,10 +663,14 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                                         file_timer = crate::rustdesk_interval(time::interval(MILLI5));
                                     }
                                     let log = fs::serialize_transfer_jobs(&write_jobs);
-                                    self.cm.ui_handler.file_transfer_log("transfer", &log);
+                                    if ConnectionManager::<T>::is_ui_visible(self.conn_id) {
+                                        self.cm.ui_handler.file_transfer_log("transfer", &log);
+                                    }
                                 }
                                 Data::FileTransferLog((action, log)) => {
-                                    self.cm.ui_handler.file_transfer_log(&action, &log);
+                                    if ConnectionManager::<T>::is_ui_visible(self.conn_id) {
+                                        self.cm.ui_handler.file_transfer_log(&action, &log);
+                                    }
                                 }
                                 #[cfg(target_os = "windows")]
                                 Data::ClipboardFile(_clip) => {
@@ -651,7 +709,9 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                                     self.cm.change_language();
                                 }
                                 Data::DataPortableService(ipc::DataPortableService::CmShowElevation(show)) => {
-                                    self.cm.show_elevation(show);
+                                    if ConnectionManager::<T>::is_ui_visible(self.conn_id) {
+                                        self.cm.show_elevation(show);
+                                    }
                                 }
                                 Data::StartVoiceCall => {
                                     self.cm.voice_call_started(self.conn_id);
@@ -783,7 +843,9 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                     }
                 },
                 Some(job_log) = rx_log.recv() => {
-                    self.cm.ui_handler.file_transfer_log("transfer", &job_log);
+                    if ConnectionManager::<T>::is_ui_visible(self.conn_id) {
+                        self.cm.ui_handler.file_transfer_log("transfer", &job_log);
+                    }
                 }
                 _ = file_timer.tick() => {
                     if !self.read_jobs.is_empty() {
@@ -792,7 +854,9 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                             log::error!("Error processing read jobs: {}", e);
                         }
                         let log = fs::serialize_transfer_jobs(&self.read_jobs);
-                        self.cm.ui_handler.file_transfer_log("transfer", &log);
+                        if ConnectionManager::<T>::is_ui_visible(self.conn_id) {
+                            self.cm.ui_handler.file_transfer_log("transfer", &log);
+                        }
                     } else {
                         file_timer = crate::rustdesk_interval(time::interval_at(Instant::now() + SEC30, SEC30));
                     }
@@ -897,6 +961,7 @@ pub async fn start_listen<T: InvokeUiCM>(
                 block_input,
                 privacy_mode,
                 from_switch,
+                ui_state,
                 ..
             }) => {
                 current_id = id;
@@ -919,11 +984,14 @@ pub async fn start_listen<T: InvokeUiCM>(
                     block_input,
                     privacy_mode,
                     from_switch,
+                    ui_state.unwrap_or_default(),
                     tx.clone(),
                 );
             }
             Some(Data::ChatMessage { text }) => {
-                cm.new_message(current_id, text);
+                if ConnectionManager::<T>::is_ui_visible(current_id) {
+                    cm.new_message(current_id, text);
+                }
             }
             Some(Data::FS(fs)) => {
                 // Android doesn't need CM-side file reading (no need_validate_file_read_access)

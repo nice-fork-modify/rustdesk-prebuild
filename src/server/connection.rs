@@ -371,6 +371,8 @@ pub struct Connection {
     closed: bool,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     start_cm_ipc_para: Option<StartCmIpcPara>,
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    cm_ui_state: ipc::ClientUiState,
     auto_disconnect_timer: Option<(Instant, u64)>,
     authed_conn_id: Option<self::raii::AuthedConnID>,
     file_remove_log_control: FileRemoveLogControl,
@@ -571,6 +573,8 @@ impl Connection {
                 rx_desktop_ready,
                 tx_cm_stream_ready,
             }),
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            cm_ui_state: ipc::ClientUiState::Pending,
             auto_disconnect_timer: None,
             authed_conn_id: None,
             file_remove_log_control: FileRemoveLogControl::new(id),
@@ -2092,6 +2096,25 @@ impl Connection {
     }
 
     fn try_start_cm(&mut self, peer_id: String, name: String, authorized: bool) {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let ui_state = {
+            if self.cm_ui_state == ipc::ClientUiState::Pending {
+                self.cm_ui_state = ipc::ClientUiState::Visible;
+            }
+            self.cm_ui_state
+        };
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        let ui_state = ipc::ClientUiState::Visible;
+        self.try_start_cm_with_ui_state(peer_id, name, authorized, ui_state);
+    }
+
+    fn try_start_cm_with_ui_state(
+        &mut self,
+        peer_id: String,
+        name: String,
+        authorized: bool,
+        ui_state: ipc::ClientUiState,
+    ) {
         self.send_to_cm(ipc::Data::Login {
             id: self.inner.id(),
             is_file_transfer: self.file_transfer.is_some(),
@@ -2112,7 +2135,24 @@ impl Connection {
             block_input: self.block_input,
             privacy_mode: self.privacy_mode,
             from_switch: self.from_switch,
+            ui_state: Some(ui_state),
         });
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            self.cm_ui_state = ui_state;
+        }
+    }
+
+    /// Register or refresh the complete backend client without changing its established UI state.
+    /// The initial pending record keeps CM IPC/business channels alive without exposing a UI row.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    fn try_start_cm_pending(&mut self) {
+        self.try_start_cm_with_ui_state(
+            self.lr.my_id.clone(),
+            self.lr.my_name.clone(),
+            false,
+            self.cm_ui_state,
+        );
     }
 
     #[inline]
@@ -2610,6 +2650,7 @@ impl Connection {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             if !should_use_terminal_os_login_scope(self.terminal, &lr.os_login.username) {
                 self.try_start_cm_ipc();
+                self.try_start_cm_pending();
             }
 
             #[cfg(target_os = "linux")]

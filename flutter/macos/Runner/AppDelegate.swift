@@ -19,6 +19,10 @@ class AppDelegate: FlutterAppDelegate {
     
     override func applicationDidFinishLaunching(_ aNotification: Notification) {
         launched = true;
-        NSApplication.shared.activate(ignoringOtherApps: true);
+        // The CM window stays engine-ready but hidden until Flutter receives a
+        // UI-visible connection. Do not activate/focus it at process launch.
+        if !CommandLine.arguments.contains("--cm") {
+            NSApplication.shared.activate(ignoringOtherApps: true);
+        }
     }
 }

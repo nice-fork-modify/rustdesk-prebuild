@@ -66,8 +66,9 @@ class _DesktopServerPageState extends State<DesktopServerPage>
     super.onWindowClose();
   }
 
-  void onRemoveId(String id) {
-    if (tabController.state.value.tabs.isEmpty) {
+  void onRemoveId(String id) async {
+    if (tabController.state.value.tabs.isEmpty &&
+        await bind.cmGetClientsLength() == 0) {
       windowManager.close();
     }
   }

@@ -6,7 +6,19 @@ use std::{
     task::Poll,
 };
 
+use serde_derive::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ClientUiState {
+    /// The connection is registered with CM but is not yet exposed to the UI.
+    Pending,
+    /// The connection is exposed to the UI.
+    #[default]
+    Visible,
+    /// The connection remains a backend-only CM connection.
+    Hidden,
+}
 
 #[cfg(not(target_os = "ios"))]
 use hbb_common::whoami;

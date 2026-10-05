@@ -167,8 +167,25 @@ static void my_application_activate(GApplication* application) {
   gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
 
   try_set_transparent(window, gtk_window_get_screen(window), view);
-  gtk_widget_show(GTK_WIDGET(window));
+  // Keep the CM engine alive without mapping its window. Dart shows it only
+  // after a UI-visible client is registered; the main window keeps its
+  // historical startup behavior.
+  if (!gIsConnectionManager) {
+    gtk_widget_show(GTK_WIDGET(window));
+  }
   gtk_widget_show(GTK_WIDGET(view));
+  if (gIsConnectionManager) {
+    // A hidden top-level window does not realize its children. Realize the
+    // Flutter view and its GLArea explicitly so the Dart engine starts while
+    // the CM window remains unmapped and cannot take focus.
+    gtk_widget_realize(GTK_WIDGET(window));
+    gtk_widget_realize(GTK_WIDGET(view));
+    GtkWidget* gl_area = find_gl_area(GTK_WIDGET(view));
+    if (gl_area != NULL) {
+      gtk_widget_show(gl_area);
+      gtk_widget_realize(gl_area);
+    }
+  }
 
   // Register callback for sub-windows created by desktop_multi_window plugin.
   // Handles both Wayland shortcuts inhibition (guarded inside) and side button
@@ -195,7 +212,9 @@ static void my_application_activate(GApplication* application) {
   side_buttons_init_for_window(window, side_channel);
   g_object_unref(side_channel);
 
-  gtk_widget_grab_focus(GTK_WIDGET(view));
+  if (!gIsConnectionManager) {
+    gtk_widget_grab_focus(GTK_WIDGET(view));
+  }
 }
 
 // Implements GApplication::local_command_line.

@@ -351,20 +351,24 @@ class ChatModel with ChangeNotifier {
       return;
     }
     if (text.isEmpty) return;
-    if (desktopType == DesktopType.cm) {
-      await showCmWindow();
-    }
     String? peerId;
     if (id == clientModeID) {
       peerId = session.id;
     } else {
-      peerId = session.serverModel.clients
-          .firstWhereOrNull((e) => e.id == id)
-          ?.peerId;
+      final client = session.serverModel.clients
+          .firstWhereOrNull((e) => e.id == id);
+      if (client == null || client.uiState.name != 'visible') {
+        debugPrint("Failed to receive msg, client is not UI-visible");
+        return;
+      }
+      peerId = client.peerId;
     }
     if (peerId == null) {
       debugPrint("Failed to receive msg, peerId is null");
       return;
+    }
+    if (desktopType == DesktopType.cm) {
+      await showCmWindow();
     }
 
     final messagekey = MessageKey(peerId, id);
