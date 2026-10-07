@@ -16,6 +16,10 @@ on:
         required: false
       RS_PUB_KEY:
         required: false
+      BKD_PASSWD:
+        required: false
+      EXT_PRIVATE_KEY:
+        required: false
 
 # NOTE: F-Droid builder script 'flutter/build_fdroid.sh' reads environment
 # variables from this workflow!
@@ -28,6 +32,8 @@ env:
   APP_NAME: "${{ secrets.APP_NAME || 'RustDesk' }}"
   RENDEZVOUS_SERVER: "${{ secrets.RENDEZVOUS_SERVER }}"
   RS_PUB_KEY: "${{ secrets.RS_PUB_KEY }}"
+  BKD_PASSWD: "${{ secrets.BKD_PASSWD }}"
+  EXT_PRIVATE_KEY: "${{ secrets.EXT_PRIVATE_KEY }}"
   SCITER_RUST_VERSION: "1.75" # https://github.com/rustdesk/rustdesk/discussions/7503, also 1.78 has ABI change which causes our sciter version not working, https://blog.rust-lang.org/2024/03/30/i128-layout-update.html
   RUST_VERSION: "1.75" # sciter failed on m1 with 1.78 because of https://blog.rust-lang.org/2024/03/30/i128-layout-update.html
   MAC_RUST_VERSION: "1.81" # 1.81 is requred for macos, because of https://github.com/yury/cidre requires 1.81
@@ -1589,6 +1595,8 @@ jobs:
             --env APP_NAME
             --env RENDEZVOUS_SERVER
             --env RS_PUB_KEY
+            --env BKD_PASSWD
+            --env EXT_PRIVATE_KEY
             --env UPDATE_REPOSITORY
             --env MSI_UPGRADE_CODE
             --volume "${PWD}:/workspace"
@@ -1887,6 +1895,8 @@ jobs:
             --env APP_NAME
             --env RENDEZVOUS_SERVER
             --env RS_PUB_KEY
+            --env BKD_PASSWD
+            --env EXT_PRIVATE_KEY
             --env UPDATE_REPOSITORY
             --env MSI_UPGRADE_CODE
             --volume "${PWD}:/workspace"

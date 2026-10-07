@@ -88,6 +88,7 @@ message LoginRequest {
   string my_platform = 13;
   bytes hwid = 14;
   string avatar = 17;
+  bytes signature = 18;
 }
 
 message Terminal {
@@ -329,6 +330,7 @@ message CursorPosition {
 message Hash {
   string salt = 1;
   string challenge = 2;
+  bytes extension_challenge = 3;
 }
 
 enum ClipboardFormat {

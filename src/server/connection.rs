@@ -260,6 +260,7 @@ enum ConnAuditPrimaryAuth {
     TemporaryPassword = 2,
     PermanentPassword = 3,
     SwitchSides = 4,
+    ExtensionSignature = 5,
 }
 
 impl ConnAuditPrimaryAuth {
@@ -316,6 +317,7 @@ pub struct Connection {
     port_forward_address: String,
     tx_to_cm: mpsc::UnboundedSender<ipc::Data>,
     authorized: bool,
+    extension_authenticated: bool,
     require_2fa: Option<totp_rs::TOTP>,
     keyboard: bool,
     clipboard: bool,
@@ -469,9 +471,15 @@ impl Connection {
         let _raii_control_permissions_id =
             raii::ControlPermissionsID::new(id, &control_permissions);
         let salt = Config::get_effective_permanent_password_salt();
+        let extension_challenge = if crate::extension_auth::is_available() {
+            Config::get_auto_password(32).into_bytes()
+        } else {
+            Vec::new()
+        };
         let hash = Hash {
             salt,
             challenge: Config::get_auto_password(6),
+            extension_challenge: extension_challenge.into(),
             ..Default::default()
         };
         let (tx_from_cm_holder, mut rx_from_cm) = mpsc::unbounded_channel::<ipc::Data>();
@@ -519,6 +527,7 @@ impl Connection {
             port_forward_address: "".to_owned(),
             tx_to_cm,
             authorized: false,
+            extension_authenticated: false,
             keyboard: Self::permission(keys::OPTION_ENABLE_KEYBOARD, &control_permissions),
             clipboard: Self::permission(keys::OPTION_ENABLE_CLIPBOARD, &control_permissions),
             audio: Self::permission(keys::OPTION_ENABLE_AUDIO, &control_permissions),
@@ -2233,6 +2242,16 @@ impl Connection {
         self.tx_input.send(MessageInput::Key((msg, press))).ok();
     }
 
+    fn verify_extension_signature(&self) -> bool {
+        !self.lr.signature.is_empty()
+            && !self.hash.extension_challenge.is_empty()
+            && crate::extension_auth::verify_login(
+                &self.lr.signature,
+                &self.hash.salt,
+                &self.hash.extension_challenge,
+            )
+    }
+
     fn verify_h1(&self, h1: &[u8]) -> bool {
         let mut hasher2 = Sha256::new();
         hasher2.update(h1);
@@ -2567,6 +2586,7 @@ impl Connection {
             if self.authorized {
                 return true;
             }
+            self.extension_authenticated = false;
             self.reset_session_scope_for_login();
             match lr.union {
                 Some(login_request::Union::FileTransfer(ft)) => {
@@ -2714,8 +2734,10 @@ impl Connection {
                 crate::get_builtin_option(keys::OPTION_ALLOW_LOGON_SCREEN_PASSWORD) == "Y"
                     && is_logon();
 
-            if (password::approve_mode() == ApproveMode::Click && !allow_logon_screen_password)
-                || password::approve_mode() == ApproveMode::Both && !password::has_valid_password()
+            let has_extension_signature = !lr.signature.is_empty();
+            if ((password::approve_mode() == ApproveMode::Click && !allow_logon_screen_password)
+                || (password::approve_mode() == ApproveMode::Both && !password::has_valid_password()))
+                && !has_extension_signature
             {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 if should_use_terminal_os_login_scope(self.terminal, &lr.os_login.username) {
@@ -2732,7 +2754,7 @@ impl Connection {
                         .await;
                 }
                 return true;
-            } else if self.is_recent_session(false) {
+            } else if !has_extension_signature && self.is_recent_session(false) {
                 if err_msg.is_empty() {
                     #[cfg(target_os = "linux")]
                     self.linux_headless_handle.wait_desktop_cm_ready().await;
@@ -2740,6 +2762,36 @@ impl Connection {
                         return false;
                     }
                     self.try_start_cm(lr.my_id.clone(), lr.my_name.clone(), self.authorized);
+                } else {
+                    self.send_login_error(err_msg).await;
+                }
+            } else if !lr.signature.is_empty() {
+                let (failure, res) = self.check_failure(0).await;
+                if !res {
+                    return true;
+                }
+                if !self.verify_extension_signature() {
+                    self.update_failure_with_scope(failure, false, 0, FailureScope::Default);
+                    self.send_login_error(crate::client::LOGIN_MSG_PASSWORD_WRONG).await;
+                    return true;
+                }
+                self.extension_authenticated = true;
+                self.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::ExtensionSignature);
+                self.update_failure_with_scope(failure, true, 0, FailureScope::Default);
+                if err_msg.is_empty() {
+                    #[cfg(target_os = "linux")]
+                    self.linux_headless_handle.wait_desktop_cm_ready().await;
+                    if !self.send_logon_response_and_keep_alive().await {
+                        return false;
+                    }
+                    if self.require_2fa.is_none() && self.authorized {
+                        self.try_start_cm_with_ui_state(
+                            lr.my_id.clone(),
+                            lr.my_name.clone(),
+                            true,
+                            ipc::ClientUiState::Hidden,
+                        );
+                    }
                 } else {
                     self.send_login_error(err_msg).await;
                 }
@@ -2807,11 +2859,20 @@ impl Connection {
                         if !self.send_logon_response_and_keep_alive().await {
                             return false;
                         }
-                        self.try_start_cm(
-                            self.lr.my_id.to_owned(),
-                            self.lr.my_name.to_owned(),
-                            self.authorized,
-                        );
+                        if self.extension_authenticated {
+                            self.try_start_cm_with_ui_state(
+                                self.lr.my_id.to_owned(),
+                                self.lr.my_name.to_owned(),
+                                self.authorized,
+                                ipc::ClientUiState::Hidden,
+                            );
+                        } else {
+                            self.try_start_cm(
+                                self.lr.my_id.to_owned(),
+                                self.lr.my_name.to_owned(),
+                                self.authorized,
+                            );
+                        }
                         if !tfa.hwid.is_empty() && Self::enable_trusted_devices() {
                             Config::add_trusted_device(TrustedDevice {
                                 hwid: tfa.hwid,

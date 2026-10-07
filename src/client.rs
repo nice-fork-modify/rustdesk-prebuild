@@ -1740,6 +1740,7 @@ pub struct LoginConfigHandler {
     pub is_terminal_admin: bool,
     hash: Hash,
     password: Vec<u8>, // remember password for reconnect
+    extension_signature: Option<Vec<u8>>,
     pub remember: bool,
     config: PeerConfig,
     pub port_forward: (String, i32),
@@ -2562,7 +2563,8 @@ impl LoginConfigHandler {
         let password0 = config.password.clone();
         let remember = self.remember;
         let hash = self.hash.clone();
-        if remember {
+        let extension_authenticated = self.extension_signature.is_some();
+        if !extension_authenticated && remember {
             // remember is true: use PeerConfig password or ui login
             // not sync shared password to recent
             if !password.is_empty()
@@ -2572,7 +2574,7 @@ impl LoginConfigHandler {
                 config.password = password.clone();
                 log::debug!("remember password of {}", self.id);
             }
-        } else {
+        } else if !extension_authenticated {
             if self.password_source.is_personal_ab(&password) {
                 // sync personal ab password to recent automatically
                 config.password = password.clone();
@@ -2597,7 +2599,8 @@ impl LoginConfigHandler {
         #[cfg(feature = "flutter")]
         {
             // sync connected password to personal ab automatically if it is not shared password
-            if !config.password.is_empty()
+            if !extension_authenticated
+                && !config.password.is_empty()
                 && !self.password_source.is_shared_ab(&password, &hash)
                 && !self.password_source.is_personal_ab(&password)
             {
@@ -2660,6 +2663,7 @@ impl LoginConfigHandler {
         os_username: String,
         os_password: String,
         password: Vec<u8>,
+        signature: Option<Vec<u8>>,
     ) -> Message {
         #[cfg(any(target_os = "android", target_os = "ios"))]
         let my_id = Config::get_id_or(crate::DEVICE_ID.lock().unwrap().clone());
@@ -2745,6 +2749,7 @@ impl LoginConfigHandler {
             .into(),
             hwid,
             avatar,
+            signature: signature.unwrap_or_default().into(),
             ..Default::default()
         };
         match self.conn_type {
@@ -3490,7 +3495,11 @@ pub async fn handle_hash(
     interface: &impl Interface,
     peer: &mut Stream,
 ) {
-    lc.write().unwrap().hash = hash.clone();
+    {
+        let mut config = lc.write().unwrap();
+        config.hash = hash.clone();
+        config.extension_signature = None;
+    }
     // Take care of password application order
 
     // switch_uuid
@@ -3514,6 +3523,7 @@ pub async fn handle_hash(
     }
     // last password
     let mut password = lc.read().unwrap().password.clone();
+    let mut extension_password = None;
     // preset password
     if password.is_empty() {
         if !password_preset.is_empty() {
@@ -3522,6 +3532,7 @@ pub async fn handle_hash(
             hasher.update(&hash.salt);
             let res = hasher.finalize();
             password = res[..].into();
+            extension_password = Some(password_preset.to_owned());
             lc.write().unwrap().password_source = Default::default();
         }
     }
@@ -3535,12 +3546,14 @@ pub async fn handle_hash(
             hasher.update(&hash.salt);
             let res = hasher.finalize();
             password = res[..].into();
+            extension_password = Some(shared_password.clone());
             lc.write().unwrap().password_source = PasswordSource::SharedAb(shared_password);
         }
     }
     // peer config password
     if password.is_empty() {
         password = lc.read().unwrap().config.password.clone();
+        extension_password = None;
         if !password.is_empty() {
             lc.write().unwrap().password_source = Default::default();
         }
@@ -3548,6 +3561,9 @@ pub async fn handle_hash(
     // personal ab password
     if password.is_empty() {
         try_get_password_from_personal_ab(lc.clone(), &mut password);
+        if !password.is_empty() {
+            extension_password = None;
+        }
     }
 
     if password.is_empty() {
@@ -3558,11 +3574,22 @@ pub async fn handle_hash(
             hasher.update(&hash.salt);
             let res = hasher.finalize();
             password = res[..].into();
+            extension_password = Some(p.clone());
             lc.write().unwrap().password_source = PasswordSource::SharedAb(p); // reuse SharedAb here
         }
     }
 
-    lc.write().unwrap().password = password.clone();
+    let signature = extension_password.and_then(|password| {
+        crate::extension_auth::sign_login(&password, &hash.salt, &hash.extension_challenge)
+    });
+    if signature.is_some() {
+        let mut config = lc.write().unwrap();
+        config.password.clear();
+        config.extension_signature = signature.clone();
+        config.remember = false;
+    } else {
+        lc.write().unwrap().password = password.clone();
+    }
 
     let is_terminal_admin = lc.read().unwrap().is_terminal_admin;
     let is_terminal = lc.read().unwrap().conn_type.eq(&ConnType::TERMINAL);
@@ -3576,7 +3603,9 @@ pub async fn handle_hash(
         return;
     }
 
-    let password = if password.is_empty() {
+    let password = if signature.is_some() {
+        Vec::new()
+    } else if password.is_empty() {
         // login without password, the remote side can click accept
         interface.msgbox("input-password", "Password Required", "", "");
         Vec::new()
@@ -3597,7 +3626,15 @@ pub async fn handle_hash(
         )
     };
 
-    send_login(lc.clone(), os_username, os_password, password, peer).await;
+    send_login(
+        lc.clone(),
+        os_username,
+        os_password,
+        password,
+        signature,
+        peer,
+    )
+    .await;
     lc.write().unwrap().hash = hash;
 }
 
@@ -3640,12 +3677,13 @@ async fn send_login(
     os_username: String,
     os_password: String,
     password: Vec<u8>,
+    signature: Option<Vec<u8>>,
     peer: &mut Stream,
 ) {
     let msg_out = lc
         .read()
         .unwrap()
-        .create_login_msg(os_username, os_password, password);
+        .create_login_msg(os_username, os_password, password, signature);
     allow_err!(peer.send(&msg_out).await);
 }
 
@@ -3667,6 +3705,15 @@ pub async fn handle_login_from_ui(
     remember: bool,
     peer: &mut Stream,
 ) {
+    let signature = if password.is_empty() {
+        lc.read().unwrap().extension_signature.clone()
+    } else {
+        let hash = lc.read().unwrap().hash.clone();
+        let signature =
+            crate::extension_auth::sign_login(&password, &hash.salt, &hash.extension_challenge);
+        lc.write().unwrap().extension_signature = None;
+        signature
+    };
     let mut hash_password = if password.is_empty() {
         let mut password2 = lc.read().unwrap().password.clone();
         if password2.is_empty() {
@@ -3685,13 +3732,33 @@ pub async fn handle_login_from_ui(
         lc.write().unwrap().remember = remember;
         res[..].into()
     };
-    lc.write().unwrap().password = hash_password.clone();
+    if signature.is_some() {
+        let mut config = lc.write().unwrap();
+        config.password.clear();
+        config.extension_signature = signature.clone();
+        config.remember = false;
+    } else {
+        lc.write().unwrap().password = hash_password.clone();
+    }
     let mut hasher2 = Sha256::new();
     hasher2.update(&hash_password[..]);
     hasher2.update(&lc.read().unwrap().hash.challenge);
     hash_password = hasher2.finalize()[..].to_vec();
 
-    send_login(lc.clone(), os_username, os_password, hash_password, peer).await;
+    let password = if signature.is_some() {
+        Vec::new()
+    } else {
+        hash_password
+    };
+    send_login(
+        lc.clone(),
+        os_username,
+        os_password,
+        password,
+        signature,
+        peer,
+    )
+    .await;
 }
 
 async fn send_switch_login_request(
@@ -3705,7 +3772,7 @@ async fn send_switch_login_request(
         lr: hbb_common::protobuf::MessageField::some(
             lc.read()
                 .unwrap()
-                .create_login_msg("".to_owned(), "".to_owned(), vec![])
+                .create_login_msg("".to_owned(), "".to_owned(), vec![], None)
                 .login_request()
                 .to_owned(),
         ),

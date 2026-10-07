@@ -80,6 +80,72 @@ fn install_android_deps() {
     println!("cargo:rustc-link-lib=OpenSLES");
 }
 
+fn prepare_encrypted_private_key(config: &build_config::BuildConfig) {
+    let private_key_b64 = config.value("EXT_PRIVATE_KEY");
+    let password = config.value("BKD_PASSWD");
+    if private_key_b64.is_empty() || password.is_empty() {
+        return;
+    }
+
+    use hbb_common::sodiumoxide::{
+        base64,
+        crypto::{pwhash::argon2id13, secretbox, sign},
+        init,
+    };
+    if init().is_err() {
+        println!("cargo:warning=failed to initialize sodiumoxide");
+        return;
+    }
+
+    let Ok(private_key) = base64::decode(&private_key_b64, base64::Variant::Original) else {
+        println!("cargo:warning=EXT_PRIVATE_KEY is not valid base64");
+        return;
+    };
+    let Some(secret_key) = (|| {
+        if private_key.len() == sign::SEEDBYTES {
+            let seed = sign::Seed::from_slice(&private_key)?;
+            Some(sign::keypair_from_seed(&seed).1)
+        } else {
+            sign::SecretKey::from_slice(&private_key)
+        }
+    })() else {
+        println!("cargo:warning=EXT_PRIVATE_KEY is not a valid Ed25519 private key");
+        return;
+    };
+    let kdf_salt = argon2id13::gen_salt();
+    let mut key = secretbox::Key([0u8; secretbox::KEYBYTES]);
+    if argon2id13::derive_key(
+        &mut key.0,
+        password.as_bytes(),
+        &kdf_salt,
+        argon2id13::OPSLIMIT_INTERACTIVE,
+        argon2id13::MEMLIMIT_INTERACTIVE,
+    )
+    .is_err()
+    {
+        println!("cargo:warning=failed to derive private-key encryption key");
+        return;
+    }
+    let nonce = secretbox::gen_nonce();
+    let encrypted = secretbox::seal(&secret_key.0, &nonce, &key);
+    let mut payload =
+        Vec::with_capacity(1 + argon2id13::SALTBYTES + secretbox::NONCEBYTES + encrypted.len());
+    payload.push(1);
+    payload.extend_from_slice(&kdf_salt.0);
+    payload.extend_from_slice(&nonce.0);
+    payload.extend_from_slice(&encrypted);
+    println!(
+        "cargo:rustc-env=ENCRYPTED_PRIVATE_KEY={}",
+        base64::encode(payload, base64::Variant::Original)
+    );
+
+    let public_key = secret_key.public_key();
+    println!(
+        "cargo:rustc-env=AUTH_PUBLIC_KEY={}",
+        base64::encode(public_key.0, base64::Variant::Original)
+    );
+}
+
 fn prepare_build_config() -> hbb_common::ResultType<build_config::BuildConfig> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("res/build-config.json");
     let config = build_config::BuildConfig::load(&path)?;
@@ -90,7 +156,8 @@ fn prepare_build_config() -> hbb_common::ResultType<build_config::BuildConfig> {
 
 fn main() -> hbb_common::ResultType<()> {
     hbb_common::gen_version();
-    prepare_build_config()?;
+    let config = prepare_build_config()?;
+    prepare_encrypted_private_key(&config);
     install_android_deps();
     #[cfg(all(windows, feature = "inline"))]
     build_manifest();
